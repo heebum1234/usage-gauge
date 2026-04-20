@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Usage Gauge</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="widget" id="widget" data-gauge="bar" data-theme="dark" data-glow="on" data-wstatus="ok">
+    <div class="w-head" id="wHead">
+      <div class="w-dots"><i></i><i></i><i></i></div>
+      <div class="w-title">Usage</div>
+      <div class="w-sub">·&nbsp;LIVE</div>
+      <div class="w-live-dot" style="margin-left: 4px"></div>
+      <div class="w-actions">
+        <button class="w-btn" id="refreshBtn" title="Refresh now (R)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" /><path d="M13.5 2.5V5.5H10.5" />
+          </svg>
+        </button>
+        <button class="w-btn" id="simBtn" title="Simulate drop (S)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 3v9" /><path d="M4.5 8.5L8 12l3.5-3.5" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="w-body">
+      <div class="svc" id="svcClaude" data-status="ok">
+        <div class="svc-head">
+          <div class="svc-badge claude">C</div>
+          <div class="svc-name">Claude Code</div>
+          <div class="svc-plan">MAX</div>
+        </div>
+
+        <div class="gauge-row">
+          <div class="gauge-pct"><span class="num">82</span><span class="sym">%</span></div>
+          <div class="gauge-meta">reset in <b class="reset">6h 33m</b></div>
+        </div>
+        <div class="bar-wrap">
+          <div class="bar-ticks"><i></i><i></i><i></i></div>
+          <div class="bar-fill"></div>
+        </div>
+
+        <div class="gauge-ring">
+          <svg viewBox="0 0 44 44">
+            <circle class="track" cx="22" cy="22" r="18" fill="none" stroke-width="4" />
+            <circle class="fill" cx="22" cy="22" r="18" fill="none" stroke-width="4" stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" />
+          </svg>
+          <div class="gauge-ring-label"><span class="num">82</span><span class="sym">%</span></div>
+        </div>
+
+        <div class="gauge-num"><span class="num">82</span><span class="sym">%</span></div>
+
+        <div class="gauge-meta-row gauge-meta-row-bar"></div>
+        <div class="gauge-meta-row gauge-meta-row-num">
+          <span>Claude · MAX</span>
+          <span>reset <b class="reset">6h 33m</b></span>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="svc" id="svcCodex" data-status="ok">
+        <div class="svc-head">
+          <div class="svc-badge codex">X</div>
+          <div class="svc-name">Codex</div>
+          <div class="svc-plan">PRO</div>
+        </div>
+
+        <div class="gauge-row">
+          <div class="gauge-pct"><span class="num">71</span><span class="sym">%</span></div>
+          <div class="gauge-meta">reset in <b class="reset">5h 40m</b></div>
+        </div>
+        <div class="bar-wrap">
+          <div class="bar-ticks"><i></i><i></i><i></i></div>
+          <div class="bar-fill"></div>
+        </div>
+
+        <div class="gauge-ring">
+          <svg viewBox="0 0 44 44">
+            <circle class="track" cx="22" cy="22" r="18" fill="none" stroke-width="4" />
+            <circle class="fill" cx="22" cy="22" r="18" fill="none" stroke-width="4" stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" />
+          </svg>
+          <div class="gauge-ring-label"><span class="num">71</span><span class="sym">%</span></div>
+        </div>
+
+        <div class="gauge-num"><span class="num">71</span><span class="sym">%</span></div>
+
+        <div class="gauge-meta-row gauge-meta-row-bar"></div>
+        <div class="gauge-meta-row gauge-meta-row-num">
+          <span>Codex · PRO</span>
+          <span>reset <b class="reset">5h 40m</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="w-foot">
+      <span class="w-refresh"><span class="pip"></span> syncing every <b>30s</b></span>
+      <span class="push"></span>
+      <span>drag to move</span>
+    </div>
+  </div>
+
+  <button class="tweaks-fab" id="tweaksFab" title="Tweaks">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  </button>
+
+  <div class="tweaks" id="tweaks">
+    <button class="close" id="closeTweaks">×</button>
+    <h4><i></i> Tweaks</h4>
+
+    <div class="group">
+      <div class="label">Gauge type</div>
+      <div class="seg" id="segGauge">
+        <button data-v="bar" class="active">Bar</button>
+        <button data-v="ring">Ring</button>
+        <button data-v="num">Number</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label">Theme</div>
+      <div class="seg" id="segTheme">
+        <button data-v="dark" class="active">Dark</button>
+        <button data-v="light">Light</button>
+        <button data-v="glass">Glass</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label">Status glow</div>
+      <div class="seg" id="segGlow" style="grid-template-columns: repeat(2, 1fr);">
+        <button data-v="on" class="active">On</button>
+        <button data-v="off">Off</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label" style="display: flex; justify-content: space-between;">
+        <span>Simulate Claude</span>
+        <span id="simClaudeVal" style="font-family: var(--font-mono); color: var(--text)">82%</span>
+      </div>
+      <div class="slider-row">
+        <input type="range" min="0" max="100" value="82" id="simClaude" />
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label" style="display: flex; justify-content: space-between;">
+        <span>Simulate Codex</span>
+        <span id="simCodexVal" style="font-family: var(--font-mono); color: var(--text)">71%</span>
+      </div>
+      <div class="slider-row">
+        <input type="range" min="0" max="100" value="71" id="simCodex" />
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">
+    <div class="ticon" id="toastIcon">!</div>
+    <div class="ttxt">
+      <div class="t1" id="toastT1">Claude Code · 20% remaining</div>
+      <div class="t2" id="toastT2">threshold crossed · 20%</div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

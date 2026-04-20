@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+build/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Local assistant metadata
+CLAUDE.md
+.claude/
+.claude.json
+.claude-*
+.codex
+.codex/
+.codex.json
+.codex-*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temp
+tmp/
+temp/
+node_modules/
+dist/
+out/
+.DS_Store
+*.log
+
+docs/
