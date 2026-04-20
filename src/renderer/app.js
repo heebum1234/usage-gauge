@@ -2,8 +2,12 @@ const DEFAULTS = {
   gauge: 'bar',
   theme: 'dark',
   glow: 'on',
-  claude: 82,
-  codex: 71,
+  claude: null,
+  codex: null,
+  claudePlan: 'PRO',
+  codexPlan: 'PRO',
+  claudeResetInMs: null,
+  codexResetInMs: null,
 };
 
 const ALLOWED = {
@@ -15,17 +19,10 @@ const ALLOWED = {
 const state = {
   ...DEFAULTS,
   thresholds: {
-    claude: DEFAULTS.claude,
-    codex: DEFAULTS.codex,
+    claude: null,
+    codex: null,
   },
 };
-
-const pauseAutoUntil = {
-  claude: 0,
-  codex: 0,
-};
-
-let autoTickHandle = null;
 
 const widget = document.getElementById('widget');
 const svcC = document.getElementById('svcClaude');
@@ -46,6 +43,9 @@ const refreshBtn = document.getElementById('refreshBtn');
 const simBtn = document.getElementById('simBtn');
 
 function statusFor(pct) {
+  if (pct === null) {
+    return 'unk';
+  }
   if (pct <= 20) {
     return 'crit';
   }
@@ -55,32 +55,62 @@ function statusFor(pct) {
   return 'ok';
 }
 
-function formatReset(pct) {
-  const hours = Math.max(0, Math.floor(pct * 0.08));
-  const mins = Math.floor((pct * 0.08 - hours) * 60);
+function formatReset(resetInMs) {
+  if (typeof resetInMs !== 'number' || !Number.isFinite(resetInMs) || resetInMs <= 0) {
+    return 'unknown';
+  }
+
+  const totalMinutes = Math.max(0, Math.round(resetInMs / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
   return `${hours}h ${String(mins).padStart(2, '0')}m`;
 }
 
-function applyPct(el, pct) {
-  const value = Math.max(0, Math.min(100, Math.round(pct)));
+function normalizePct(pct) {
+  if (typeof pct !== 'number' || !Number.isFinite(pct)) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, Math.round(pct)));
+}
+
+function applyService(el, data) {
+  const value = normalizePct(data.pct);
   const status = statusFor(value);
+  const displayValue = value === null ? '—' : String(value);
+  const width = value === null ? 0 : value;
+
   el.dataset.status = status;
   el.querySelectorAll('.num').forEach((n) => {
-    n.textContent = value;
+    n.textContent = displayValue;
   });
-  el.querySelector('.bar-fill').style.width = `${value}%`;
+  el.querySelectorAll('.sym').forEach((sym) => {
+    sym.style.visibility = value === null ? 'hidden' : '';
+  });
+  el.querySelector('.bar-fill').style.width = `${width}%`;
+
   const circ = 2 * Math.PI * 18;
-  const offset = circ * (1 - value / 100);
+  const offset = circ * (1 - width / 100);
   el.querySelectorAll('.gauge-ring .fill').forEach((ring) => {
     ring.style.strokeDashoffset = offset;
   });
   el.querySelectorAll('.reset').forEach((reset) => {
-    reset.textContent = formatReset(value);
+    reset.textContent = value === null ? 'unavailable' : formatReset(data.resetInMs);
   });
+
+  const plan = typeof data.plan === 'string' && data.plan.trim() ? data.plan.trim().toUpperCase() : '—';
+  const planEl = el.querySelector('.svc-plan');
+  if (planEl) {
+    planEl.textContent = plan;
+  }
+
   return status;
 }
 
-function maybeToast(key, prevPct, pct, label) {
+function maybeToast(prevPct, pct, label) {
+  if (prevPct === null || pct === null) {
+    return;
+  }
+
   const prevBucket = Math.floor(prevPct / 10);
   const bucket = Math.floor(pct / 10);
   if (bucket < prevBucket && bucket <= 5) {
@@ -91,9 +121,9 @@ function maybeToast(key, prevPct, pct, label) {
 function showToast(label, pct) {
   const crit = pct <= 20;
   toast.classList.toggle('crit', crit);
-  toastIcon.textContent = crit ? '!' : '⚠';
-  toastT1.textContent = `${label} · ${pct}% remaining`;
-  toastT2.textContent = `threshold crossed · ${Math.floor(pct / 10) * 10}%`;
+  toastIcon.textContent = crit ? '!' : '?';
+  toastT1.textContent = `${label} - ${pct}% remaining`;
+  toastT2.textContent = `threshold crossed - ${Math.floor(pct / 10) * 10}%`;
   toast.classList.add('show');
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => {
@@ -109,19 +139,27 @@ function applyAll(opts = {}) {
   widget.dataset.theme = state.theme;
   widget.dataset.glow = state.glow;
 
-  const sC = applyPct(svcC, state.claude);
-  const sX = applyPct(svcX, state.codex);
+  const sC = applyService(svcC, {
+    pct: state.claude,
+    resetInMs: state.claudeResetInMs,
+    plan: state.claudePlan,
+  });
+  const sX = applyService(svcX, {
+    pct: state.codex,
+    resetInMs: state.codexResetInMs,
+    plan: state.codexPlan,
+  });
 
-  const rank = { ok: 0, warn: 1, crit: 2 };
+  const rank = { ok: 0, unk: 0, warn: 1, crit: 2 };
   const worst = rank[sC] >= rank[sX] ? sC : sX;
-  widget.dataset.wstatus = state.glow === 'off' ? 'ok' : worst;
+  widget.dataset.wstatus = state.glow === 'off' || worst === 'unk' ? 'ok' : worst;
 
   state.thresholds.claude = state.claude;
   state.thresholds.codex = state.codex;
 
   if (opts.checkToast !== false) {
-    maybeToast('claude', prevC, state.claude, 'Claude Code');
-    maybeToast('codex', prevX, state.codex, 'Codex');
+    maybeToast(prevC, state.claude, 'Claude Code');
+    maybeToast(prevX, state.codex, 'Codex');
   }
 }
 
@@ -160,10 +198,12 @@ function bindSeg(id, key) {
 }
 
 function syncSimValues() {
-  simClaude.value = state.claude;
-  simCodex.value = state.codex;
-  simClaudeVal.textContent = `${state.claude}%`;
-  simCodexVal.textContent = `${state.codex}%`;
+  const claudeValue = state.claude === null ? 0 : state.claude;
+  const codexValue = state.codex === null ? 0 : state.codex;
+  simClaude.value = claudeValue;
+  simCodex.value = codexValue;
+  simClaudeVal.textContent = state.claude === null ? '—%' : `${state.claude}%`;
+  simCodexVal.textContent = state.codex === null ? '—%' : `${state.codex}%`;
 }
 
 function isDevMode() {
@@ -186,36 +226,35 @@ function refreshAnimation() {
   }, 720);
 }
 
+function requestRefresh() {
+  refreshAnimation();
+  window.usageGauge.requestUsageRefresh();
+}
+
 function simulateDrop() {
   if (!isDevMode()) {
     return;
   }
 
-  state.claude = Math.max(0, state.claude - (6 + Math.floor(Math.random() * 14)));
-  state.codex = Math.max(0, state.codex - (6 + Math.floor(Math.random() * 14)));
-  pauseAutoUntil.claude = Date.now() + 60000;
-  pauseAutoUntil.codex = Date.now() + 60000;
+  state.claude = Math.max(0, (state.claude ?? 100) - (6 + Math.floor(Math.random() * 14)));
+  state.codex = Math.max(0, (state.codex ?? 100) - (6 + Math.floor(Math.random() * 14)));
   syncSimValues();
   applyAll();
 }
 
-function autoTick() {
-  const now = Date.now();
+function applyUsageUpdate(usage) {
+  const claude = usage && usage.claude ? usage.claude : null;
+  const codex = usage && usage.codex ? usage.codex : null;
 
-  if (now >= pauseAutoUntil.claude) {
-    state.claude = Math.max(0, state.claude - Math.floor(Math.random() * 5));
-  }
-  if (now >= pauseAutoUntil.codex) {
-    state.codex = Math.max(0, state.codex - Math.floor(Math.random() * 5));
-  }
+  state.claude = normalizePct(claude && claude.pct);
+  state.codex = normalizePct(codex && codex.pct);
+  state.claudeResetInMs = claude ? claude.resetInMs : null;
+  state.codexResetInMs = codex ? codex.resetInMs : null;
+  state.claudePlan = claude && claude.plan ? claude.plan : DEFAULTS.claudePlan;
+  state.codexPlan = codex && codex.plan ? codex.plan : DEFAULTS.codexPlan;
 
   syncSimValues();
   applyAll();
-}
-
-function startAutoTick() {
-  clearInterval(autoTickHandle);
-  autoTickHandle = setInterval(autoTick, 30000);
 }
 
 function bindEvents() {
@@ -228,7 +267,6 @@ function bindEvents() {
       return;
     }
     state.claude = Number(simClaude.value);
-    pauseAutoUntil.claude = Date.now() + 60000;
     simClaudeVal.textContent = `${state.claude}%`;
     applyAll();
   });
@@ -238,12 +276,11 @@ function bindEvents() {
       return;
     }
     state.codex = Number(simCodex.value);
-    pauseAutoUntil.codex = Date.now() + 60000;
     simCodexVal.textContent = `${state.codex}%`;
     applyAll();
   });
 
-  refreshBtn.addEventListener('click', refreshAnimation);
+  refreshBtn.addEventListener('click', requestRefresh);
   simBtn.addEventListener('click', simulateDrop);
 
   tweaksFab.addEventListener('click', () => {
@@ -258,13 +295,11 @@ function bindEvents() {
 
   window.addEventListener('keydown', (event) => {
     if (event.key === 'r' || event.key === 'R') {
-      refreshAnimation();
+      requestRefresh();
     }
 
     if (event.key === 's' || event.key === 'S') {
-      if (isDevMode()) {
-        simulateDrop();
-      }
+      simulateDrop();
     }
 
     const key = event.key.toLowerCase();
@@ -282,6 +317,8 @@ function bindEvents() {
   window.usageGauge.onToggleDevMode(() => {
     setDevMode(!isDevMode());
   });
+
+  window.usageGauge.onUsageUpdate(applyUsageUpdate);
 }
 
 async function bootstrap() {
@@ -306,7 +343,7 @@ async function bootstrap() {
   syncSimValues();
 
   applyAll({ checkToast: false });
-  startAutoTick();
+  window.usageGauge.requestUsageRefresh();
 }
 
 bindEvents();
