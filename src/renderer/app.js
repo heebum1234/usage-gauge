@@ -4,8 +4,8 @@ const DEFAULTS = {
   glow: 'on',
   claude: null,
   codex: null,
-  claudePlan: 'PRO',
-  codexPlan: 'PRO',
+  claudePlan: null,
+  codexPlan: null,
   claudeResetInMs: null,
   codexResetInMs: null,
 };
@@ -97,7 +97,7 @@ function applyService(el, data) {
     reset.textContent = value === null ? 'unavailable' : formatReset(data.resetInMs);
   });
 
-  const plan = typeof data.plan === 'string' && data.plan.trim() ? data.plan.trim().toUpperCase() : '—';
+  const plan = typeof data.plan === 'string' && data.plan.trim() ? data.plan.trim().toUpperCase() : '-';
   const planEl = el.querySelector('.svc-plan');
   if (planEl) {
     planEl.textContent = plan;
@@ -250,8 +250,8 @@ function applyUsageUpdate(usage) {
   state.codex = normalizePct(codex && codex.pct);
   state.claudeResetInMs = claude ? claude.resetInMs : null;
   state.codexResetInMs = codex ? codex.resetInMs : null;
-  state.claudePlan = claude && claude.plan ? claude.plan : DEFAULTS.claudePlan;
-  state.codexPlan = codex && codex.plan ? codex.plan : DEFAULTS.codexPlan;
+  state.claudePlan = claude && claude.plan ? claude.plan : null;
+  state.codexPlan = codex && codex.plan ? codex.plan : null;
 
   syncSimValues();
   applyAll();

@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -46,13 +47,21 @@ function loadPty() {
 
 function stripAnsi(value) {
   return String(value || '')
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
-    .replace(/\x1b[@-Z\\-_]/g, '');
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b[PX^_][\s\S]*?\x1b\\/g, '')
+    .replace(/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g, '')
+    .replace(/\x1b[@-Z\\-_]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ' ');
+}
+
+function reassembleTuiRows(raw) {
+  return String(raw || '')
+    .replace(/\\x1b/g, '\x1b')
+    .replace(/\x1b\[(?:\d+;)?\d+H/g, '\n');
 }
 
 function normalizeText(raw) {
-  return stripAnsi(raw)
+  return stripAnsi(reassembleTuiRows(raw))
     .replace(/[│╭╮╰╯─]/g, ' ')
     .replace(/[█▌░▒▓]/g, ' ')
     .replace(/\r\n?/g, '\n');
@@ -142,17 +151,19 @@ function parseClaudeUsage(raw) {
     return null;
   }
 
-  const section = lines.slice(start + 1, start + 5).join('\n');
+  const section = lines.slice(start + 1, start + 8).join('\n');
   const usedMatch = section.match(/(\d{1,3})\s*%\s+used/i);
   if (!usedMatch) {
     return null;
   }
 
   const resetMatch = section.match(/Resets\s+([^\n]+?)(?:\s*\(|$)/i);
+  const planMatch = text.match(/\bClaude\s+(Max\s*20(?:x|×)|Max|Pro)\b/i);
+  const plan = planMatch ? planMatch[1].replace(/\s+/g, '').replace(/×/g, 'X').toUpperCase() : null;
   return {
     pct: clampPct(100 - Number(usedMatch[1])),
     resetInMs: resetMatch ? parseLocalReset(resetMatch[1]) : null,
-    plan: null,
+    plan,
     source: 'cli',
   };
 }
@@ -202,6 +213,47 @@ function parseUsage(service, raw) {
   return null;
 }
 
+function chooseWindowsCommandCandidate(candidates) {
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const voltaBin = candidates.filter((candidate) => candidate.toLowerCase().includes('\\volta\\bin\\'));
+  const nonInternal = candidates.filter((candidate) => !candidate.toLowerCase().includes('\\volta\\tools\\'));
+  const pool = voltaBin.length > 0 ? voltaBin : nonInternal;
+  const exe = pool.find((candidate) => /\.exe$/i.test(candidate));
+  const script = pool.find((candidate) => /\.(cmd|bat)$/i.test(candidate));
+  return exe || script || pool[0] || null;
+}
+
+function findWindowsPathCandidates(command) {
+  const pathDirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const hasExtension = /\.[^\\/]+$/.test(command);
+  const extensions = hasExtension ? [''] : ['', '.exe', '.cmd', '.bat'];
+  const seen = new Set();
+  const candidates = [];
+
+  for (const dir of pathDirs) {
+    for (const extension of extensions) {
+      const candidate = path.join(dir, `${command}${extension}`);
+      const key = candidate.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      try {
+        if (fs.existsSync(candidate)) {
+          candidates.push(candidate);
+        }
+      } catch {
+        // Ignore unreadable PATH entries.
+      }
+    }
+  }
+
+  return candidates;
+}
+
 function resolveCommand(command) {
   if (process.platform !== 'win32') {
     return { file: command, args: [], resolvedPath: command };
@@ -218,14 +270,10 @@ function resolveCommand(command) {
   }
 
   if (candidates.length === 0) {
-    return { file: command, args: [], resolvedPath: command };
+    candidates = findWindowsPathCandidates(command);
   }
 
-  const nonVolta = candidates.filter((candidate) => !candidate.toLowerCase().includes('\\volta\\bin\\'));
-  const pool = nonVolta.length > 0 ? nonVolta : candidates;
-  const exe = pool.find((candidate) => /\.exe$/i.test(candidate));
-  const script = pool.find((candidate) => /\.(cmd|bat)$/i.test(candidate));
-  const resolvedPath = exe || script || pool[0];
+  const resolvedPath = chooseWindowsCommandCandidate(candidates) || command;
 
   if (/\.(cmd|bat)$/i.test(resolvedPath)) {
     return {
@@ -472,13 +520,37 @@ const CODEX_SAMPLE = `
 ╰─────────────────────────────────────────────────────────────────────────────────╯
 `;
 
+const CLAUDE_RAW_SAMPLE = String.raw`\x1b[?25l\x1b[1;1HClaude Pro\x1b[3;1HStatus   Config   Usage   Stats\x1b[10;3HCurrent session\x1b[11;3H███████████████                     59% used\x1b[12;3HResets 3am (Asia/Seoul)\x1b[14;3HCurrent week (all models)\x1b[15;3H██████████                               39% used\x1b[?25h`;
+
 function runTests() {
+  const resolvedVolta = chooseWindowsCommandCandidate([
+    'C:\\Users\\shjung\\AppData\\Local\\Volta\\tools\\image\\node\\18.12.0\\codex.cmd',
+    'C:\\Users\\shjung\\AppData\\Local\\Volta\\bin\\codex.cmd',
+  ]);
+  assert.equal(resolvedVolta, 'C:\\Users\\shjung\\AppData\\Local\\Volta\\bin\\codex.cmd');
+
+  const resolvedExe = chooseWindowsCommandCandidate([
+    'C:\\Users\\shjung\\.local\\bin\\claude.cmd',
+    'C:\\Users\\shjung\\.local\\bin\\claude.exe',
+  ]);
+  assert.equal(resolvedExe, 'C:\\Users\\shjung\\.local\\bin\\claude.exe');
+
+  const pathCandidates = findWindowsPathCandidates('definitely-not-a-real-usage-gauge-command');
+  assert.deepEqual(pathCandidates, []);
+
   const claude = parseClaudeUsage(CLAUDE_SAMPLE);
   assert.equal(claude.pct, 41);
   assert.equal(claude.plan, null);
   assert.equal(claude.source, 'cli');
   assert.equal(typeof claude.resetInMs, 'number');
   assert.ok(claude.resetInMs > 0);
+
+  const rawClaude = parseClaudeUsage(CLAUDE_RAW_SAMPLE);
+  assert.ok(rawClaude);
+  assert.ok(rawClaude.pct >= 0 && rawClaude.pct <= 100);
+  assert.equal(rawClaude.plan, 'PRO');
+  assert.equal(typeof rawClaude.resetInMs, 'number');
+  assert.ok(rawClaude.resetInMs > 0);
 
   const codex = parseCodexStatus(CODEX_SAMPLE);
   assert.equal(codex.pct, 88);

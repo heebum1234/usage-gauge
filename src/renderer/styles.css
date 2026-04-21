@@ -52,11 +52,8 @@ body {
   border: 1px solid var(--c-ok);
   border-radius: 12px;
   box-shadow:
-    0 24px 48px rgba(0, 0, 0, 0.55),
-    0 8px 18px rgba(0, 0, 0, 0.42),
     0 0 0 1px rgba(255, 255, 255, 0.02) inset,
-    0 0 0 1px rgba(127, 176, 105, 0.25),
-    0 0 22px rgba(127, 176, 105, 0.28);
+    0 0 0 1px rgba(127, 176, 105, 0.25);
   padding: 12px 14px 14px;
   display: flex;
   flex-direction: column;
@@ -67,8 +64,6 @@ body {
 .widget[data-glow="off"] {
   border-color: var(--border);
   box-shadow:
-    0 24px 48px rgba(0, 0, 0, 0.55),
-    0 8px 18px rgba(0, 0, 0, 0.42),
     0 0 0 1px rgba(255, 255, 255, 0.02) inset;
   animation: none;
 }
@@ -76,37 +71,13 @@ body {
 .widget[data-wstatus="warn"] {
   border-color: var(--c-warn);
   box-shadow:
-    0 24px 48px rgba(0, 0, 0, 0.55),
-    0 8px 18px rgba(0, 0, 0, 0.42),
-    0 0 0 1px rgba(232, 165, 75, 0.28),
-    0 0 24px rgba(232, 165, 75, 0.32);
+    0 0 0 1px rgba(232, 165, 75, 0.28);
 }
 
 .widget[data-wstatus="crit"] {
   border-color: var(--c-crit);
   box-shadow:
-    0 24px 48px rgba(0, 0, 0, 0.55),
-    0 8px 18px rgba(0, 0, 0, 0.42),
-    0 0 0 1px rgba(217, 107, 107, 0.3),
-    0 0 26px rgba(217, 107, 107, 0.38);
-  animation: widgetPulse 1.6s ease-in-out infinite;
-}
-
-@keyframes widgetPulse {
-  0%,
-  100% {
-    box-shadow:
-      0 24px 48px rgba(0, 0, 0, 0.55),
-      0 0 0 1px rgba(217, 107, 107, 0.3),
-      0 0 22px rgba(217, 107, 107, 0.32);
-  }
-
-  50% {
-    box-shadow:
-      0 24px 48px rgba(0, 0, 0, 0.55),
-      0 0 0 1px rgba(217, 107, 107, 0.45),
-      0 0 34px rgba(217, 107, 107, 0.55);
-  }
+    0 0 0 1px rgba(217, 107, 107, 0.3);
 }
 
 .widget[data-theme="light"] {
@@ -145,34 +116,12 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.w-dots {
-  display: flex;
-  gap: 4px;
-  margin-right: 2px;
-}
-
-.w-dots i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--border);
-  display: block;
-}
-
 .w-title {
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
-}
-
-.w-sub {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-faint);
-  margin-left: 4px;
-  letter-spacing: 0.02em;
 }
 
 .w-actions {
@@ -188,8 +137,11 @@ body {
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-faint);
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  padding: 0;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
@@ -201,9 +153,10 @@ body {
 }
 
 .w-btn svg {
-  width: 11px;
-  height: 11px;
+  width: 12px;
+  height: 12px;
   display: block;
+  flex: 0 0 auto;
 }
 
 .w-live-dot {
@@ -260,12 +213,11 @@ body {
   width: 16px;
   height: 16px;
   border-radius: 4px;
-  display: grid;
-  place-items: center;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  color: currentColor;
 }
 
 .svc-badge.claude {
@@ -278,6 +230,27 @@ body {
   background: #1E2530;
   color: #8FA8D9;
   border: 1px solid #2A3344;
+}
+
+.svc-badge svg {
+  width: 11px;
+  height: 11px;
+  display: block;
+  fill: currentColor;
+  object-fit: contain;
+}
+
+.svc-badge.claude svg {
+  width: 12px;
+  height: 12px;
+  fill: initial;
+}
+
+.svc-badge img {
+  width: 12px;
+  height: 12px;
+  display: block;
+  object-fit: contain;
 }
 
 .svc-name {
