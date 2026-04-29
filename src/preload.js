@@ -6,7 +6,19 @@ contextBridge.exposeInMainWorld('usageGauge', {
   isDev: () => isDev,
   getState: () => ipcRenderer.invoke('usage-gauge:get-state'),
   savePrefs: (prefs) => ipcRenderer.send('usage-gauge:save-prefs', prefs),
+  requestUsageRefresh: () => ipcRenderer.invoke('usage-gauge:request-usage-refresh'),
   quit: () => ipcRenderer.send('usage-gauge:quit'),
+  onUsageUpdate: (callback) => {
+    if (typeof callback !== 'function') {
+      return () => {};
+    }
+
+    const listener = (_event, usage) => callback(usage);
+    ipcRenderer.on('usage-gauge:usage-update', listener);
+    return () => {
+      ipcRenderer.removeListener('usage-gauge:usage-update', listener);
+    };
+  },
   onToggleDevMode: (callback) => {
     if (typeof callback !== 'function') {
       return () => {};

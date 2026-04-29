@@ -12,6 +12,7 @@ build/
 .env.*.local
 
 # Local assistant metadata
+.design-ref/
 CLAUDE.md
 .claude/
 .claude.json
@@ -47,3 +48,5 @@ out/
 *.log
 
 docs/
+
+test/

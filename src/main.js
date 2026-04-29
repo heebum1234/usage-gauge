@@ -1,10 +1,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, ipcMain, screen } = require('electron');
+const { fetchUsage } = require('./usage-fetcher');
 
-const WINDOW_WIDTH = 420;
-const WINDOW_HEIGHT = 140;
+const WINDOW_WIDTH = 456;
+const WINDOW_HEIGHT = 260;
 const WINDOW_INSET = 24;
+const USAGE_REFRESH_MS = 30000;
 
 const DEFAULT_PREFS = {
   gauge: 'bar',
@@ -14,15 +16,18 @@ const DEFAULT_PREFS = {
 
 let mainWindow = null;
 let moveSaveTimer = null;
+let usageRefreshTimer = null;
+let usageRefreshInFlight = null;
 let stateFile = '';
 let savedState = { ...DEFAULT_PREFS };
+let lastSuccessfulUsage = { claude: null, codex: null };
 
 function readState() {
   try {
     const raw = fs.readFileSync(stateFile, 'utf8');
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
-      return { ...DEFAULT_PREFS, ...parsed };
+      return { ...DEFAULT_PREFS, ...parsed, glow: 'on' };
     }
   } catch {
     // Ignore missing or malformed file.
@@ -55,15 +60,103 @@ function scheduleWindowPositionSave() {
 }
 
 function initialPosition() {
+  const workArea = screen.getPrimaryDisplay().workArea;
+
   if (Number.isFinite(savedState.x) && Number.isFinite(savedState.y)) {
-    return { x: savedState.x, y: savedState.y };
+    return clampWindowPosition(savedState.x, savedState.y, workArea);
   }
 
-  const workArea = screen.getPrimaryDisplay().workArea;
   return {
     x: Math.round(workArea.x + workArea.width - WINDOW_WIDTH - WINDOW_INSET),
     y: Math.round(workArea.y + WINDOW_INSET),
   };
+}
+
+function clampWindowPosition(x, y, workArea = screen.getPrimaryDisplay().workArea) {
+  const minX = workArea.x;
+  const minY = workArea.y;
+  const maxX = Math.max(minX, workArea.x + workArea.width - WINDOW_WIDTH);
+  const maxY = Math.max(minY, workArea.y + workArea.height - WINDOW_HEIGHT);
+
+  return {
+    x: Math.round(Math.min(Math.max(x, minX), maxX)),
+    y: Math.round(Math.min(Math.max(y, minY), maxY)),
+  };
+}
+
+async function refreshUsageNow() {
+  if (usageRefreshInFlight) {
+    return usageRefreshInFlight;
+  }
+
+  usageRefreshInFlight = fetchUsage()
+    .catch(() => ({ claude: null, codex: null, fetchedAt: Date.now() }))
+    .then((usage) => {
+      writeRawUsageLogs(usage);
+      logUsageStatus(usage);
+
+      if (usage.claude) {
+        lastSuccessfulUsage.claude = usage.claude;
+      }
+      if (usage.codex) {
+        lastSuccessfulUsage.codex = usage.codex;
+      }
+
+      const rendererUsage = {
+        claude: usage.claude || lastSuccessfulUsage.claude || null,
+        codex: usage.codex || lastSuccessfulUsage.codex || null,
+        fetchedAt: usage.fetchedAt || Date.now(),
+      };
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('usage-gauge:usage-update', rendererUsage);
+      }
+      return rendererUsage;
+    })
+    .finally(() => {
+      usageRefreshInFlight = null;
+    });
+
+  return usageRefreshInFlight;
+}
+
+function writeRawUsageLogs(usage) {
+  if (!usage || !usage.raw) {
+    return;
+  }
+
+  for (const service of ['claude', 'codex']) {
+    if (usage[service] || !usage.raw[service]) {
+      continue;
+    }
+
+    try {
+      fs.writeFileSync(
+        path.join(app.getPath('userData'), `last-usage-output-${service}.log`),
+        usage.raw[service],
+        'utf8',
+      );
+    } catch {
+      // Debug logs are best-effort only.
+    }
+  }
+}
+
+function logUsageStatus(usage) {
+  for (const service of ['claude', 'codex']) {
+    const result = usage && usage[service];
+    if (result && Number.isFinite(result.pct)) {
+      console.log(`[usage] ${service}=ok ${result.pct}%`);
+    } else {
+      console.log(`[usage] ${service}=unreachable`);
+    }
+  }
+}
+
+function startUsageRefresh() {
+  clearInterval(usageRefreshTimer);
+  refreshUsageNow();
+  usageRefreshTimer = setInterval(refreshUsageNow, USAGE_REFRESH_MS);
 }
 
 function handleLocalShortcut(event, input) {
@@ -132,6 +225,8 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  mainWindow.webContents.once('did-finish-load', startUsageRefresh);
 }
 
 const singleInstanceLock = app.requestSingleInstanceLock();
@@ -191,6 +286,9 @@ ipcMain.on('usage-gauge:quit', () => {
   app.quit();
 });
 
+ipcMain.handle('usage-gauge:request-usage-refresh', () => refreshUsageNow());
+
 app.on('window-all-closed', () => {
+  clearInterval(usageRefreshTimer);
   app.quit();
 });

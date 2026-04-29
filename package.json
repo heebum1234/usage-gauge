@@ -4,7 +4,12 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "cross-env USAGE_GAUGE_DEV=1 electron ."
+    "dev": "cross-env USAGE_GAUGE_DEV=1 electron .",
+    "test": "node test/renderer-plan-display.test.js && node test/usage-services.test.js && node test/usage-fetcher.test.js",
+    "probe-usage": "node scripts/fetch-usage-once.js"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0"
   },
   "devDependencies": {
     "electron": "^33.0.0",
