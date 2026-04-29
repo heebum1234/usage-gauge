@@ -5,7 +5,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "cross-env USAGE_GAUGE_DEV=1 electron .",
-    "test": "node test/renderer-plan-display.test.js",
+    "test": "node test/renderer-plan-display.test.js && node test/usage-services.test.js && node test/usage-fetcher.test.js",
     "probe-usage": "node scripts/fetch-usage-once.js"
   },
   "dependencies": {
