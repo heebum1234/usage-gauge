@@ -20,13 +20,14 @@ let usageRefreshTimer = null;
 let usageRefreshInFlight = null;
 let stateFile = '';
 let savedState = { ...DEFAULT_PREFS };
+let lastSuccessfulUsage = { claude: null, codex: null };
 
 function readState() {
   try {
     const raw = fs.readFileSync(stateFile, 'utf8');
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
-      return { ...DEFAULT_PREFS, ...parsed };
+      return { ...DEFAULT_PREFS, ...parsed, glow: 'on' };
     }
   } catch {
     // Ignore missing or malformed file.
@@ -94,9 +95,16 @@ async function refreshUsageNow() {
       writeRawUsageLogs(usage);
       logUsageStatus(usage);
 
+      if (usage.claude) {
+        lastSuccessfulUsage.claude = usage.claude;
+      }
+      if (usage.codex) {
+        lastSuccessfulUsage.codex = usage.codex;
+      }
+
       const rendererUsage = {
-        claude: usage.claude || null,
-        codex: usage.codex || null,
+        claude: usage.claude || lastSuccessfulUsage.claude || null,
+        codex: usage.codex || lastSuccessfulUsage.codex || null,
         fetchedAt: usage.fetchedAt || Date.now(),
       };
 

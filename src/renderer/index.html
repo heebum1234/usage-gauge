@@ -23,11 +23,6 @@
             <path d="M21 3v5h-5" />
           </svg>
         </button>
-        <button class="w-btn" id="simBtn" title="Simulate drop (S)">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 3v9" /><path d="M4.5 8.5L8 12l3.5-3.5" />
-          </svg>
-        </button>
       </div>
     </div>
 
@@ -65,7 +60,7 @@
 
         <div class="gauge-meta-row gauge-meta-row-bar"></div>
         <div class="gauge-meta-row gauge-meta-row-num">
-          <span>Claude · -</span>
+          <span>Claude 쨌 -</span>
           <span>reset <b class="reset">6h 33m</b></span>
         </div>
       </div>
@@ -102,7 +97,7 @@
 
         <div class="gauge-meta-row gauge-meta-row-bar"></div>
         <div class="gauge-meta-row gauge-meta-row-num">
-          <span>Codex · -</span>
+          <span>Codex 쨌 -</span>
           <span>reset <b class="reset">5h 40m</b></span>
         </div>
       </div>
@@ -115,69 +110,11 @@
     </div>
   </div>
 
-  <button class="tweaks-fab" id="tweaksFab" title="Tweaks">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  </button>
-
-  <div class="tweaks" id="tweaks">
-    <button class="close" id="closeTweaks">×</button>
-    <h4><i></i> Tweaks</h4>
-
-    <div class="group">
-      <div class="label">Gauge type</div>
-      <div class="seg" id="segGauge">
-        <button data-v="bar" class="active">Bar</button>
-        <button data-v="ring">Ring</button>
-        <button data-v="num">Number</button>
-      </div>
-    </div>
-
-    <div class="group">
-      <div class="label">Theme</div>
-      <div class="seg" id="segTheme">
-        <button data-v="dark" class="active">Dark</button>
-        <button data-v="light">Light</button>
-        <button data-v="glass">Glass</button>
-      </div>
-    </div>
-
-    <div class="group">
-      <div class="label">Status glow</div>
-      <div class="seg" id="segGlow" style="grid-template-columns: repeat(2, 1fr);">
-        <button data-v="on" class="active">On</button>
-        <button data-v="off">Off</button>
-      </div>
-    </div>
-
-    <div class="group">
-      <div class="label" style="display: flex; justify-content: space-between;">
-        <span>Simulate Claude</span>
-        <span id="simClaudeVal" style="font-family: var(--font-mono); color: var(--text)">82%</span>
-      </div>
-      <div class="slider-row">
-        <input type="range" min="0" max="100" value="82" id="simClaude" />
-      </div>
-    </div>
-
-    <div class="group">
-      <div class="label" style="display: flex; justify-content: space-between;">
-        <span>Simulate Codex</span>
-        <span id="simCodexVal" style="font-family: var(--font-mono); color: var(--text)">71%</span>
-      </div>
-      <div class="slider-row">
-        <input type="range" min="0" max="100" value="71" id="simCodex" />
-      </div>
-    </div>
-  </div>
-
   <div class="toast" id="toast">
     <div class="ticon" id="toastIcon">!</div>
     <div class="ttxt">
-      <div class="t1" id="toastT1">Claude Code · 20% remaining</div>
-      <div class="t2" id="toastT2">threshold crossed · 20%</div>
+      <div class="t1" id="toastT1">Claude Code 쨌 20% remaining</div>
+      <div class="t2" id="toastT2">threshold crossed 쨌 20%</div>
     </div>
   </div>
 

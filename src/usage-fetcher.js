@@ -1,12 +1,16 @@
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = childProcess;
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const READY_SILENCE_MS = 500;
-const READY_FALLBACK_MS = 4000;
-const SILENCE_AFTER_COMMAND_MS = 800;
+const READY_FALLBACK_MS = 8000;
+const READY_COMMAND_DELAY_MS = 1200;
+const COMMAND_SUBMIT_DELAY_MS = 180;
+const COMMAND_EXEC_DELAY_MS = 380;
+const SILENCE_AFTER_COMMAND_MS = 3000;
 const PARSE_GRACE_MS = 250;
 
 const MONTHS = {
@@ -27,18 +31,55 @@ const MONTHS = {
 const SERVICE_CONFIG = {
   claude: {
     command: 'claude',
-    slashCommand: '/usage\r',
+    slashCommand: '/usage',
+    postCommandSilenceMs: SILENCE_AFTER_COMMAND_MS,
   },
   codex: {
     command: 'codex',
-    slashCommand: '/status\r',
+    slashCommand: '/status',
+    postCommandSilenceMs: 6000,
   },
 };
 
 const inFlightByService = new Map();
+let ptyForkPatched = false;
+
+function prepareSilentForkArgs(modulePath, args, options) {
+  const normalizedArgs = Array.isArray(args) ? args : [];
+  const normalizedOptions = Array.isArray(args) ? { ...(options || {}) } : { ...((args && typeof args === 'object') ? args : {}) };
+  if (/conpty_console_list_agent(?:\.js)?$/i.test(String(modulePath || ''))) {
+    normalizedOptions.silent = true;
+  }
+  return {
+    args: normalizedArgs,
+    options: normalizedOptions,
+  };
+}
+
+function patchNodePtyFork() {
+  if (ptyForkPatched || process.platform !== 'win32') {
+    return;
+  }
+
+  const originalFork = childProcess.fork;
+  childProcess.fork = function patchedFork(modulePath, args, options) {
+    const prepared = prepareSilentForkArgs(modulePath, args, options);
+    return originalFork.call(this, modulePath, prepared.args, prepared.options);
+  };
+  ptyForkPatched = true;
+}
+
+function getInitialSubmitCount(service) {
+  return service === 'claude' ? 1 : 2;
+}
+
+function getReadyCommandDelay(service) {
+  return service === 'claude' ? 0 : READY_COMMAND_DELAY_MS;
+}
 
 function loadPty() {
   try {
+    patchNodePtyFork();
     return require('node-pty');
   } catch {
     return null;
@@ -57,6 +98,7 @@ function stripAnsi(value) {
 function reassembleTuiRows(raw) {
   return String(raw || '')
     .replace(/\\x1b/g, '\x1b')
+    .replace(/\x1b\[(\d+)C/g, (_match, count) => ' '.repeat(Math.max(1, Number(count) || 1)))
     .replace(/\x1b\[(?:\d+;)?\d+H/g, '\n');
 }
 
@@ -145,13 +187,12 @@ function parseLocalReset(value, now = new Date()) {
 
 function parseClaudeUsage(raw) {
   const text = normalizeText(raw);
-  const lines = text.split('\n');
-  const start = lines.findIndex((line) => /^\s*Current session\s*$/i.test(line));
-  if (start === -1) {
+  const sectionMatch = text.match(/Current\s+session([\s\S]{0,1600}?)(?:Current\s+week|Extra usage|Esc to cancel|$)/i);
+  if (!sectionMatch) {
     return null;
   }
 
-  const section = lines.slice(start + 1, start + 8).join('\n');
+  const section = sectionMatch[1];
   const usedMatch = section.match(/(\d{1,3})\s*%\s+used/i);
   if (!usedMatch) {
     return null;
@@ -192,6 +233,11 @@ function parseCodexStatus(raw) {
       reset.setHours(clock.hours, clock.minutes, 0, 0);
       resetInMs = deltaFromDate(reset, now);
     }
+  } else {
+    const timeOnlyResetMatch = limitLine.match(/resets\s+(\d{1,2}:\d{2})(?:\)|\s|$)/i);
+    if (timeOnlyResetMatch) {
+      resetInMs = parseLocalReset(timeOnlyResetMatch[1]);
+    }
   }
 
   const planMatch = text.match(/Account:\s+\S+\s*\(([A-Za-z]+)\)/i);
@@ -213,6 +259,50 @@ function parseUsage(service, raw) {
   return null;
 }
 
+function detectCodexScreen(raw) {
+  const text = normalizeText(raw);
+  if (/Update available!/i.test(text) || /Press enter to continue/i.test(text)) {
+    return 'update';
+  }
+  if (/\b5h limit\s*:/.test(text)) {
+    return 'status';
+  }
+  if (/Explain this codebase/i.test(text) || /\?\s+for shortcuts/i.test(text)) {
+    return 'ready';
+  }
+  return null;
+}
+
+function detectClaudeScreen(raw) {
+  const text = normalizeText(raw);
+  if (/Current session/i.test(text)) {
+    return 'status';
+  }
+  if (/\?\s+for shortcuts/i.test(text) || /\bClaude Code\b/i.test(text)) {
+    return 'ready';
+  }
+  return null;
+}
+
+function detectServiceScreen(service, raw) {
+  if (service === 'claude') {
+    return detectClaudeScreen(raw);
+  }
+  if (service === 'codex') {
+    return detectCodexScreen(raw);
+  }
+  return null;
+}
+
+function shouldConfirmClaudeUsage(raw) {
+  return /\/usage\s+Show session cost,\s+plan usage,\s+and activity stats/i.test(normalizeText(raw));
+}
+
+function shouldIgnorePtyException(error) {
+  const message = error && error.message ? error.message : String(error);
+  return /AttachConsole failed/i.test(message);
+}
+
 function chooseWindowsCommandCandidate(candidates) {
   if (candidates.length === 0) {
     return null;
@@ -224,6 +314,44 @@ function chooseWindowsCommandCandidate(candidates) {
   const exe = pool.find((candidate) => /\.exe$/i.test(candidate));
   const script = pool.find((candidate) => /\.(cmd|bat)$/i.test(candidate));
   return exe || script || pool[0] || null;
+}
+
+function getPathCandidates(command) {
+  let candidates = [];
+  try {
+    candidates = execFileSync('where.exe', [command], { encoding: 'utf8', windowsHide: true })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    candidates = [];
+  }
+
+  if (candidates.length === 0) {
+    candidates = findWindowsPathCandidates(command);
+  }
+
+  return candidates;
+}
+
+function resolveCodexEntrypoint(candidates) {
+  const toolShim = candidates.find((candidate) => /\\volta\\tools\\image\\node\\[^\\]+\\codex(?:\.(?:cmd|ps1))?$/i.test(candidate));
+  if (!toolShim) {
+    return null;
+  }
+
+  const baseDir = path.dirname(toolShim);
+  const nodeExe = path.join(baseDir, process.platform === 'win32' ? 'node.exe' : 'node');
+  const cliScript = path.join(baseDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+  if (!fs.existsSync(nodeExe) || !fs.existsSync(cliScript)) {
+    return null;
+  }
+
+  return {
+    file: nodeExe,
+    args: [cliScript],
+    resolvedPath: cliScript,
+  };
 }
 
 function findWindowsPathCandidates(command) {
@@ -259,26 +387,20 @@ function resolveCommand(command) {
     return { file: command, args: [], resolvedPath: command };
   }
 
-  let candidates = [];
-  try {
-    candidates = execFileSync('where.exe', [command], { encoding: 'utf8', windowsHide: true })
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-  } catch {
-    candidates = [];
-  }
-
-  if (candidates.length === 0) {
-    candidates = findWindowsPathCandidates(command);
+  const candidates = getPathCandidates(command);
+  if (command === 'codex') {
+    const codexEntrypoint = resolveCodexEntrypoint(candidates);
+    if (codexEntrypoint) {
+      return codexEntrypoint;
+    }
   }
 
   const resolvedPath = chooseWindowsCommandCandidate(candidates) || command;
 
   if (/\.(cmd|bat)$/i.test(resolvedPath)) {
     return {
-      file: 'cmd.exe',
-      args: ['/d', '/s', '/c', `"${resolvedPath}"`],
+      file: process.env.ComSpec || 'cmd.exe',
+      args: ['/d', '/s', '/c', resolvedPath],
       resolvedPath,
     };
   }
@@ -301,6 +423,7 @@ function spawnServicePty(service, options = {}) {
   const cwd = options.cwd || process.cwd();
   const env = { ...process.env, TERM: 'xterm-256color', ...(options.env || {}) };
   const command = resolveCommand(config.command);
+  const postCommandSilenceMs = config.postCommandSilenceMs || SILENCE_AFTER_COMMAND_MS;
 
   console.error('[usage-fetcher] spawn:', service, '→', command.resolvedPath);
 
@@ -308,14 +431,23 @@ function spawnServicePty(service, options = {}) {
     let term = null;
     let raw = '';
     let commandSent = false;
+    let commandPending = false;
+    let claudeAwaitingUsageConfirm = false;
+    let claudeUsageConfirmSent = false;
+    let codexInterstitialDismissed = false;
     let settled = false;
     let readySilenceTimer = null;
+    let readyCommandTimer = null;
     let postCommandSilenceTimer = null;
     let parseGraceTimer = null;
+    let claudeConfirmFallbackTimer = null;
     let firstDataAt = null;
     const startedAt = Date.now();
 
     const onPtyUncaughtException = (error) => {
+      if (shouldIgnorePtyException(error)) {
+        return;
+      }
       const message = error && error.message ? error.message : String(error);
       if (/conpty|\\\\\.\\pipe\\|node-pty/i.test(message)) {
         finish(message);
@@ -334,8 +466,10 @@ function spawnServicePty(service, options = {}) {
       clearTimeout(totalTimer);
       clearTimeout(readyFallbackTimer);
       clearTimeout(readySilenceTimer);
+      clearTimeout(readyCommandTimer);
       clearTimeout(postCommandSilenceTimer);
       clearTimeout(parseGraceTimer);
+      clearTimeout(claudeConfirmFallbackTimer);
       setTimeout(() => {
         process.removeListener('uncaughtException', onPtyUncaughtException);
       }, 1500);
@@ -355,27 +489,93 @@ function spawnServicePty(service, options = {}) {
       });
     };
 
-    const sendSlashCommand = () => {
+    const queueClaudeUsageConfirm = () => {
+      if (claudeUsageConfirmSent) {
+        return;
+      }
+      claudeUsageConfirmSent = true;
       if (settled || !term || commandSent) {
         return;
       }
-      commandSent = true;
+      try {
+        term.write('\r');
+        commandSent = true;
+        commandPending = false;
+        claudeAwaitingUsageConfirm = false;
+        clearTimeout(postCommandSilenceTimer);
+        postCommandSilenceTimer = setTimeout(() => finish(), SILENCE_AFTER_COMMAND_MS);
+        clearTimeout(claudeConfirmFallbackTimer);
+        claudeConfirmFallbackTimer = setTimeout(() => {
+          if (settled || !term || parseUsage('claude', raw) || !shouldConfirmClaudeUsage(raw)) {
+            return;
+          }
+          try {
+            term.write('\r');
+          } catch (error) {
+            finish(error.message);
+          }
+        }, 180);
+      } catch (error) {
+        finish(error.message);
+      }
+    };
+
+    const sendSlashCommand = () => {
+      if (settled || !term || commandSent || commandPending) {
+        return;
+      }
+      commandPending = true;
+      const initialSubmitCount = getInitialSubmitCount(service);
       try {
         term.write(config.slashCommand);
+        setTimeout(() => {
+          if (settled || !term || commandSent) {
+            return;
+          }
+          try {
+            term.write('\r');
+            setTimeout(() => {
+              if (settled || !term || commandSent) {
+                return;
+              }
+              try {
+                const finalize = () => {
+                  commandSent = true;
+                  commandPending = false;
+                  clearTimeout(postCommandSilenceTimer);
+                  postCommandSilenceTimer = setTimeout(() => finish(), postCommandSilenceMs);
+                };
+                if (service === 'claude') {
+                  claudeAwaitingUsageConfirm = true;
+                  if (!claudeUsageConfirmSent && shouldConfirmClaudeUsage(raw)) {
+                    queueClaudeUsageConfirm();
+                  }
+                  return;
+                }
+                if (initialSubmitCount > 1) {
+                  term.write('\r');
+                }
+                finalize();
+              } catch (error) {
+                finish(error.message);
+              }
+            }, COMMAND_EXEC_DELAY_MS);
+          } catch (error) {
+            finish(error.message);
+          }
+        }, COMMAND_SUBMIT_DELAY_MS);
       } catch (error) {
         finish(error.message);
         return;
       }
-      clearTimeout(postCommandSilenceTimer);
-      postCommandSilenceTimer = setTimeout(() => finish(), SILENCE_AFTER_COMMAND_MS);
     };
 
-    const scheduleReadySend = () => {
-      if (commandSent) {
+    const scheduleReadySend = (delayMs = READY_SILENCE_MS) => {
+      if (commandSent || commandPending) {
         return;
       }
-      clearTimeout(readySilenceTimer);
-      readySilenceTimer = setTimeout(sendSlashCommand, READY_SILENCE_MS);
+      clearTimeout(readyCommandTimer);
+      readyCommandTimer = setTimeout(sendSlashCommand, delayMs);
     };
 
     const totalTimer = setTimeout(() => finish('timeout'), timeoutMs);
@@ -405,12 +605,35 @@ function spawnServicePty(service, options = {}) {
       }
 
       if (!commandSent) {
-        scheduleReadySend();
+        if (service === 'claude' && !claudeUsageConfirmSent && shouldConfirmClaudeUsage(raw)) {
+          queueClaudeUsageConfirm();
+          return;
+        }
+        const screen = detectServiceScreen(service, raw);
+        if (service === 'codex' && screen === 'update' && !codexInterstitialDismissed) {
+          codexInterstitialDismissed = true;
+          try {
+            term.write('2\r');
+          } catch (error) {
+            finish(error.message);
+          }
+          return;
+        }
+        if (screen === 'ready') {
+          scheduleReadySend(getReadyCommandDelay(service));
+          return;
+        }
+        if (screen === 'status') {
+          finish();
+          return;
+        }
+        clearTimeout(readySilenceTimer);
+        readySilenceTimer = setTimeout(sendSlashCommand, READY_SILENCE_MS);
         return;
       }
 
       clearTimeout(postCommandSilenceTimer);
-      postCommandSilenceTimer = setTimeout(() => finish(), SILENCE_AFTER_COMMAND_MS);
+      postCommandSilenceTimer = setTimeout(() => finish(), postCommandSilenceMs);
 
       if (parseUsage(service, raw)) {
         clearTimeout(parseGraceTimer);
@@ -419,6 +642,9 @@ function spawnServicePty(service, options = {}) {
     });
 
     term.onExit((event) => {
+      if (settled) {
+        return;
+      }
       console.error('[usage-fetcher]', service, 'exit code=', event.exitCode, 'signal=', event.signal);
       finish(event.exitCode === 0 ? null : `exit ${event.exitCode}`);
     });
@@ -448,10 +674,8 @@ async function fetchService(service, options = {}) {
 }
 
 async function fetchUsage(options = {}) {
-  const [claudeResult, codexResult] = await Promise.all([
-    fetchServiceResult('claude', options),
-    fetchServiceResult('codex', options),
-  ]);
+  const claudeResult = await fetchServiceResult('claude', options);
+  const codexResult = await fetchServiceResult('codex', options);
 
   const usage = {
     claude: claudeResult.parsed,
@@ -535,6 +759,23 @@ function runTests() {
   ]);
   assert.equal(resolvedExe, 'C:\\Users\\shjung\\.local\\bin\\claude.exe');
 
+  const codexEntrypoint = resolveCodexEntrypoint([
+    'C:\\Users\\shjung\\AppData\\Local\\Volta\\bin\\codex.cmd',
+    'C:\\Users\\shjung\\AppData\\Local\\Volta\\tools\\image\\node\\18.12.0\\codex.cmd',
+  ]);
+  if (process.platform === 'win32') {
+    assert.ok(codexEntrypoint);
+    assert.equal(codexEntrypoint.file.toLowerCase().endsWith('\\node.exe'), true);
+    assert.equal(codexEntrypoint.args[0].toLowerCase().endsWith('\\node_modules\\@openai\\codex\\bin\\codex.js'), true);
+  } else {
+    assert.equal(codexEntrypoint, null);
+  }
+
+  if (process.platform === 'win32') {
+    const resolvedCmd = resolveCommand('codex');
+    assert.ok(Array.isArray(resolvedCmd.args));
+  }
+
   const pathCandidates = findWindowsPathCandidates('definitely-not-a-real-usage-gauge-command');
   assert.deepEqual(pathCandidates, []);
 
@@ -559,6 +800,40 @@ function runTests() {
   assert.equal(typeof codex.resetInMs, 'number');
   assert.ok(codex.resetInMs > 0);
 
+  const codexTimeOnly = parseCodexStatus(`
+    5h limit: [████████████████░░░░] 77% left (resets 14:32)
+  `);
+  assert.equal(codexTimeOnly.pct, 77);
+  assert.equal(typeof codexTimeOnly.resetInMs, 'number');
+  assert.ok(codexTimeOnly.resetInMs > 0);
+
+  assert.equal(detectCodexScreen('Update available!\nPress enter to continue'), 'update');
+  assert.equal(detectCodexScreen('› Explain this codebase\n  gpt-5.4 default'), 'ready');
+  assert.equal(detectCodexScreen(CODEX_SAMPLE), 'status');
+  assert.equal(shouldConfirmClaudeUsage('/usage                              Show session cost, plan usage, and activity stats'), true);
+  assert.equal(shouldConfirmClaudeUsage('Claude Code\n? for shortcuts'), false);
+  assert.equal(shouldIgnorePtyException(new Error('AttachConsole failed')), true);
+  assert.equal(shouldIgnorePtyException(new Error('EPERM: operation not permitted, open \\\\.\\pipe\\conpty-test')), false);
+  assert.deepEqual(prepareSilentForkArgs('E:\\workspace\\usage-gauge\\node_modules\\node-pty\\lib\\conpty_console_list_agent.js', ['123']), {
+    args: ['123'],
+    options: { silent: true },
+  });
+  assert.deepEqual(
+    prepareSilentForkArgs('E:\\workspace\\usage-gauge\\node_modules\\node-pty\\lib\\conpty_console_list_agent.js', ['123'], { cwd: 'E:\\workspace\\usage-gauge' }),
+    { args: ['123'], options: { cwd: 'E:\\workspace\\usage-gauge', silent: true } },
+  );
+  assert.deepEqual(
+    prepareSilentForkArgs('E:\\workspace\\usage-gauge\\other-agent.js', ['123'], { cwd: 'E:\\workspace\\usage-gauge' }),
+    { args: ['123'], options: { cwd: 'E:\\workspace\\usage-gauge' } },
+  );
+  assert.equal(getInitialSubmitCount('claude'), 1);
+  assert.equal(getInitialSubmitCount('codex'), 2);
+
+  assert.equal(detectClaudeScreen('Claude Code\n? for shortcuts'), 'ready');
+  assert.equal(detectClaudeScreen(CLAUDE_RAW_SAMPLE), 'status');
+  assert.equal(detectServiceScreen('claude', CLAUDE_RAW_SAMPLE), 'status');
+  assert.equal(detectServiceScreen('codex', CODEX_SAMPLE), 'status');
+
   console.log('usage-fetcher self-test passed');
 }
 
@@ -569,8 +844,17 @@ if (require.main === module) {
 module.exports = {
   fetchService,
   fetchUsage,
+  detectClaudeScreen,
   parseClaudeUsage,
   parseCodexStatus,
   parseUsage,
+  detectCodexScreen,
+  detectServiceScreen,
+  resolveCodexEntrypoint,
+  resolveCommand,
+  prepareSilentForkArgs,
+  getInitialSubmitCount,
+  shouldConfirmClaudeUsage,
+  shouldIgnorePtyException,
   stripAnsi,
 };
