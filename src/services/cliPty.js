@@ -353,6 +353,19 @@ function spawnUsagePty(config, options = {}) {
       clearTimeout(postCommandSilenceTimer);
       postCommandSilenceTimer = setTimeout(() => finish(), postCommandSilenceMs);
 
+      const handled = typeof config.handlePostCommandData === 'function'
+        ? config.handlePostCommandData({
+          finish,
+          markCommandSent,
+          raw,
+          state,
+          term,
+        })
+        : false;
+      if (handled) {
+        return;
+      }
+
       if (config.parse(raw)) {
         clearTimeout(parseGraceTimer);
         parseGraceTimer = setTimeout(() => finish(), PARSE_GRACE_MS);

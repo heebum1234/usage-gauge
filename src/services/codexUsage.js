@@ -67,6 +67,14 @@ function detectCodexScreen(raw) {
   return null;
 }
 
+function shouldRetryCodexStatusSubmit(raw) {
+  const text = normalizeText(raw);
+  if (/\b5h limit\s*:/.test(text)) {
+    return false;
+  }
+  return /(^|\n)\s*[›>]\s*\/status\b/im.test(text);
+}
+
 function fetchCodexResult(options = {}) {
   return spawnUsagePty({
     service: 'codex',
@@ -79,6 +87,7 @@ function fetchCodexResult(options = {}) {
     createState() {
       return {
         interstitialDismissed: false,
+        statusRetryCount: 0,
       };
     },
     afterInitialSubmit({ markCommandSent, term }) {
@@ -110,6 +119,18 @@ function fetchCodexResult(options = {}) {
       }
       return false;
     },
+    handlePostCommandData({ finish, raw, state, term }) {
+      if (!shouldRetryCodexStatusSubmit(raw) || state.statusRetryCount > 0) {
+        return false;
+      }
+      state.statusRetryCount += 1;
+      try {
+        term.write('\r');
+      } catch (error) {
+        finish(error.message);
+      }
+      return false;
+    },
   }, options);
 }
 
@@ -126,4 +147,5 @@ module.exports = {
   fetchCodex,
   fetchCodexResult,
   parseCodexStatus,
+  shouldRetryCodexStatusSubmit,
 };

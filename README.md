@@ -46,6 +46,16 @@ For a normal Electron start without dev mode:
 npm start
 ```
 
+### Build Windows Package
+
+Install dependencies, then run:
+
+```bash
+npm run build
+```
+
+Artifacts are written under `dist\`.
+
 ## How It Works
 
 Usage Gauge starts a local terminal session for each configured CLI, runs the same usage command you would type by hand (`/usage` for Claude Code, `/status` for Codex), and parses the command output into a remaining-usage gauge.
