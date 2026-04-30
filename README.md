@@ -1,35 +1,49 @@
-# Usage Gauge
+<h1 align="center">Usage Gauge</h1>
 
-A floating desktop widget that shows your Claude Code and Codex usage at a glance.
+<p align="center">
+  <em>Claude Code & Codex usage, always one glance away.</em>
+</p>
 
-<!-- Badges placeholder: license, platform, release status -->
+<p align="center">
+  <img src="documentation/images/main_screenshot.png" alt="Usage Gauge widget showing Claude Code at 74% and Codex at 93%" width="420" />
+</p>
 
-![demo](docs/demo.gif)
-<!-- TODO: Replace with a GIF showing the gauge changing color as usage approaches the limit. -->
+<p align="center">
+  <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue" />
+  <img alt="status" src="https://img.shields.io/badge/status-beta-yellow" />
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-green" />
+</p>
 
-## Why
+---
 
-Getting cut off mid-session by Claude Code or Codex usage limits breaks flow at exactly the wrong time. Usage Gauge keeps the remaining quota visible in a small always-on-top widget, so you can pace long coding sessions before the CLI stops you.
+## Why Usage Gauge?
 
-**No API keys, no extra auth — if the CLI works in your terminal, it works here.**
+Getting cut off mid-session by Claude Code or Codex usage limits breaks flow at exactly the wrong time. **Usage Gauge** keeps the remaining quota visible in a small always-on-top widget, so you can pace long coding sessions before the CLI stops you.
 
-Usage Gauge runs each CLI exactly as you would in your terminal, sends the built-in usage command, and reads the result locally.
+> **No API keys. No extra auth. No data leaves your machine.**
+> If the CLI works in your terminal, it works here.
 
-## Features
+---
 
-- Real-time gauge for Claude Code `/usage` and Codex `/status`
-- Always-on-top floating widget with a minimal footprint
-- No API keys — uses your existing CLI session
-- Cross-platform Electron app, with Windows as the primary target and macOS secondary
+## ✨ Features
 
-## Install
+- 📊 **Real-time gauges** for Claude Code `/usage` and Codex `/status`
+- 🪟 **Always-on-top** floating widget with a minimal footprint
+- 🔐 **Zero credentials** — reuses your existing CLI session
+- 🔄 **Auto-sync** every 30 seconds
+- 🖱️ **Drag-to-move** anywhere on screen
+- 💻 **Cross-platform** Electron app (Windows primary, macOS secondary)
 
-> ⚠️ **Alpha** — prebuilt binaries coming soon. For now, run from source.
+---
+
+## 🚀 Quick Start
+
+> 🧪 **Beta** — prebuilt binaries coming soon. For now, run from source.
 
 ### Prerequisites
 
-- Node.js 18+
-- [Claude Code](https://docs.claude.com/en/docs/claude-code) and/or [Codex CLI](https://github.com/openai/codex) installed and signed in
+- **Node.js 18+**
+- [**Claude Code**](https://docs.claude.com/en/docs/claude-code) and/or [**Codex CLI**](https://github.com/openai/codex) installed and signed in
 
 ### Run From Source
 
@@ -40,15 +54,13 @@ npm install
 npm run dev
 ```
 
-For a normal Electron start without dev mode:
+Without dev mode:
 
 ```bash
 npm start
 ```
 
-### Build Windows Package
-
-Install dependencies, then run:
+### Build a Windows Package
 
 ```bash
 npm run build
@@ -56,25 +68,41 @@ npm run build
 
 Artifacts are written under `dist\`.
 
-## How It Works
+---
 
-Usage Gauge starts a local terminal session for each configured CLI, runs the same usage command you would type by hand (`/usage` for Claude Code, `/status` for Codex), and parses the command output into a remaining-usage gauge.
+## 🔍 How It Works
 
-It does not require service API keys, tokens, or separate authentication. It relies on the CLI sessions already available on your machine.
+Usage Gauge spawns a local terminal session for each configured CLI, runs the same slash command you would type by hand (`/usage` for Claude Code, `/status` for Codex), and parses the output into a remaining-usage gauge.
 
-No usage data leaves your machine.
+```
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│  CLI session │ ───▶ │  Parse output │ ───▶ │  Render gauge│
+└──────────────┘      └──────────────┘      └──────────────┘
+```
 
-## Roadmap
+No service API keys. No tokens. No telemetry. Just your existing CLI auth, read locally.
 
-- Prebuilt binaries for Windows `.exe` and macOS `.dmg`
-- `winget` and `brew` distribution
-- Configurable warning thresholds
-- Auto-start and tray/menu-bar controls
+---
 
-## Contributing
+## 🗺️ Roadmap
 
-Issues and PRs are welcome. If you are hitting CLI usage limits and have a workflow this widget should support, open an issue with the platform, CLI, and usage output shape if possible.
+- [ ] Prebuilt binaries for Windows (`.exe`) and macOS (`.dmg`)
+- [ ] `winget` and `brew` distribution
+- [ ] Configurable warning thresholds
+- [ ] Auto-start and tray / menu-bar controls
 
-## License
+---
 
-MIT (see [LICENSE](LICENSE)).
+## 🤝 Contributing
+
+Issues and PRs are welcome. If you are hitting CLI usage limits and have a workflow this widget should support, please open an issue with:
+
+- Your platform (Windows / macOS)
+- The CLI and version (`claude --version`, `codex --version`)
+- The usage output shape, if possible
+
+---
+
+## 📄 License
+
+[MIT](LICENSE) © Heebum Jeong
