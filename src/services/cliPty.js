@@ -114,23 +114,42 @@ function getPathCandidates(command) {
 }
 
 function resolveCodexEntrypoint(candidates) {
-  const toolShim = candidates.find((candidate) => /\\volta\\tools\\image\\node\\[^\\]+\\codex(?:\.(?:cmd|ps1))?$/i.test(candidate));
-  if (!toolShim) {
+  const baseDirs = [];
+
+  const nodeImageShim = candidates.find((candidate) => /\\volta\\tools\\image\\node\\[^\\]+\\codex(?:\.(?:cmd|ps1))?$/i.test(candidate));
+  if (nodeImageShim) {
+    baseDirs.push(path.dirname(nodeImageShim));
+  }
+
+  const voltaBinShim = candidates.find((candidate) => /\\volta\\bin\\codex(?:\.(?:cmd|ps1))?$/i.test(candidate));
+  if (voltaBinShim) {
+    const localAppData = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local');
+    baseDirs.push(path.join(localAppData, 'Volta', 'tools', 'image', 'packages', '@openai', 'codex'));
+  }
+
+  if (baseDirs.length === 0) {
     return null;
   }
 
-  const baseDir = path.dirname(toolShim);
-  const nodeExe = path.join(baseDir, process.platform === 'win32' ? 'node.exe' : 'node');
-  const cliScript = path.join(baseDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
-  if (!fs.existsSync(nodeExe) || !fs.existsSync(cliScript)) {
+  const nodeExe = chooseWindowsCommandCandidate(getPathCandidates('node'));
+  if (!nodeExe) {
     return null;
   }
 
-  return {
-    file: nodeExe,
-    args: [cliScript],
-    resolvedPath: cliScript,
-  };
+  for (const baseDir of baseDirs) {
+    const cliScript = path.join(baseDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    if (!fs.existsSync(cliScript)) {
+      continue;
+    }
+
+    return {
+      file: nodeExe,
+      args: [cliScript],
+      resolvedPath: cliScript,
+    };
+  }
+
+  return null;
 }
 
 function resolveCommand(command) {

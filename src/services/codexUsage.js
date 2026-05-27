@@ -61,7 +61,7 @@ function detectCodexScreen(raw) {
   if (/\b5h limit\s*:/.test(text)) {
     return 'status';
   }
-  if (/Explain this codebase/i.test(text) || /\?\s+for shortcuts/i.test(text)) {
+  if (/Explain this codebase/i.test(text) || /Find and fix a bug in @filename/i.test(text) || /\?\s+for shortcuts/i.test(text)) {
     return 'ready';
   }
   return null;
@@ -75,11 +75,15 @@ function shouldRetryCodexStatusSubmit(raw) {
   return /(^|\n)\s*[›>]\s*\/status\b/im.test(text);
 }
 
+function bracketedPaste(text) {
+  return `\x1b[200~${text}\x1b[201~`;
+}
+
 function fetchCodexResult(options = {}) {
   return spawnUsagePty({
     service: 'codex',
     command: 'codex',
-    slashCommand: '/status',
+    slashCommand: bracketedPaste('/status'),
     postCommandSilenceMs: 6000,
     readyCommandDelayMs: READY_COMMAND_DELAY_MS,
     detect: detectCodexScreen,
@@ -90,11 +94,7 @@ function fetchCodexResult(options = {}) {
         statusRetryCount: 0,
       };
     },
-    afterInitialSubmit({ markCommandSent, term }) {
-      if (!term) {
-        return false;
-      }
-      term.write('\r');
+    afterInitialSubmit({ markCommandSent }) {
       markCommandSent();
       return true;
     },
@@ -131,7 +131,7 @@ function fetchCodexResult(options = {}) {
       }
       return false;
     },
-  }, options);
+  }, { ...options, timeoutMs: options.timeoutMs || 30000 });
 }
 
 async function fetchCodex(options = {}) {
@@ -147,5 +147,6 @@ module.exports = {
   fetchCodex,
   fetchCodexResult,
   parseCodexStatus,
+  bracketedPaste,
   shouldRetryCodexStatusSubmit,
 };
