@@ -1,3 +1,6 @@
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {
   READY_COMMAND_DELAY_MS,
   spawnUsagePty,
@@ -79,7 +82,42 @@ function bracketedPaste(text) {
   return `\x1b[200~${text}\x1b[201~`;
 }
 
+function predismissCodexUpdate() {
+  const versionPath = path.join(os.homedir(), '.codex', 'version.json');
+  let version;
+
+  try {
+    version = JSON.parse(fs.readFileSync(versionPath, 'utf8'));
+  } catch (error) {
+    return;
+  }
+
+  if (
+    !version
+    || typeof version !== 'object'
+    || !version.latest_version
+    || version.dismissed_version === version.latest_version
+  ) {
+    return;
+  }
+
+  try {
+    fs.writeFileSync(versionPath, JSON.stringify({
+      ...version,
+      dismissed_version: version.latest_version,
+    }));
+  } catch (error) {
+    // Best effort only. Usage fetching must continue even if this cache cannot be updated.
+  }
+}
+
 function fetchCodexResult(options = {}) {
+  try {
+    predismissCodexUpdate();
+  } catch (error) {
+    // Best effort only. The PTY update prompt handler remains as a fallback.
+  }
+
   return spawnUsagePty({
     service: 'codex',
     command: 'codex',
@@ -147,6 +185,7 @@ module.exports = {
   fetchCodex,
   fetchCodexResult,
   parseCodexStatus,
+  predismissCodexUpdate,
   bracketedPaste,
   shouldRetryCodexStatusSubmit,
 };
