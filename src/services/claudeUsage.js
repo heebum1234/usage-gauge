@@ -52,6 +52,9 @@ function extractClaudeResetText(section) {
 
 function detectClaudeScreen(raw) {
   const text = normalizeText(raw);
+  if (/Do you trust the files in this folder/i.test(text) || /trust the files/i.test(text)) {
+    return 'trust';
+  }
   if (/Current session/i.test(text)) {
     return 'status';
   }
@@ -78,6 +81,7 @@ function fetchClaudeResult(options = {}) {
     createState() {
       return {
         awaitingUsageConfirm: false,
+        trustAccepted: false,
         usageConfirmSent: false,
       };
     },
@@ -126,6 +130,15 @@ function fetchClaudeResult(options = {}) {
       }
 
       const screen = detectClaudeScreen(raw);
+      if (screen === 'trust' && !state.trustAccepted) {
+        state.trustAccepted = true;
+        try {
+          term.write('\r');
+        } catch (error) {
+          finish(error.message);
+        }
+        return true;
+      }
       if (screen === 'ready') {
         sendSlashCommand();
         return true;

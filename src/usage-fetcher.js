@@ -75,8 +75,10 @@ async function fetchService(service, options = {}) {
 }
 
 async function fetchUsage(options = {}) {
-  const claudeResult = await fetchServiceResult('claude', options);
-  const codexResult = await fetchServiceResult('codex', options);
+  const [claudeResult, codexResult] = await Promise.all([
+    fetchServiceResult('claude', options),
+    fetchServiceResult('codex', options),
+  ]);
 
   const usage = {
     claude: claudeResult.parsed,
