@@ -2,7 +2,6 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  COMMAND_SUBMIT_DELAY_MS,
   READY_COMMAND_DELAY_MS,
   spawnUsagePty,
 } = require('./cliPty');
@@ -10,10 +9,16 @@ const {
   MONTHS,
   clampPct,
   deltaFromDate,
+  latestScreen,
   normalizeText,
   parseClockParts,
   parseLocalReset,
 } = require('./usageText');
+
+const KEY_DOWN = '\x1b[B';
+const STAGE_ENTER_DELAY_MS = 150;
+const STAGE_KEY_DELAY_MS = 45;
+const STATUS_COMMAND_KEYS = Array.from('/status');
 
 function parseCodexStatus(raw) {
   const text = normalizeText(raw);
@@ -52,50 +57,32 @@ function parseCodexStatus(raw) {
     pct: clampPct(Number(pctMatch[1])),
     resetInMs,
     plan: planMatch ? planMatch[1].toUpperCase() : null,
-    source: 'cli',
+    source: 'cli-pty',
     fetchedAt: Date.now(),
   };
 }
 
 function detectCodexScreen(raw) {
-  const text = normalizeText(raw);
-  if (
-    /(?:trust|allow)[\s\S]{0,120}(?:folder|directory)/i.test(text)
-    && /(?:yes|allow|approve|continue|press\s+enter|\b1[.)]?)/i.test(text)
-  ) {
-    return 'trust';
-  }
-  if (/Update available!/i.test(text) || /Press enter to continue/i.test(text)) {
-    return 'update';
-  }
+  const text = latestScreen(raw);
   if (/\b5h limit\s*:/.test(text)) {
     return 'status';
   }
-  if (/Explain this codebase/i.test(text) || /Find and fix a bug in @filename/i.test(text) || /\?\s+for shortcuts/i.test(text)) {
+  if (
+    /Update available!/i.test(text)
+    && /\bSkip\b/i.test(text)
+  ) {
+    return 'update';
+  }
+  if (
+    /trust the contents(?:\s+of)?/i.test(text)
+    && /(?:Yes,\s*continue|\bYes\b[\s\S]{0,80}\bcontinue\b)/i.test(text)
+  ) {
+    return 'trust';
+  }
+  if (/›/.test(text) || /Ask Codex/i.test(text) || /Explain this codebase/i.test(text) || /\?\s+for shortcuts/i.test(text)) {
     return 'ready';
   }
   return null;
-}
-
-function shouldRetryCodexStatusSubmit(raw) {
-  const text = normalizeText(raw);
-  if (/\b5h limit\s*:/.test(text)) {
-    return false;
-  }
-  return /(^|\n)\s*[›>]\s*\/status\b/im.test(text);
-}
-
-function shouldRefreshCodexLimits(raw) {
-  const text = normalizeText(raw);
-  if (/\b5h limit\s*:/.test(text)) {
-    return false;
-  }
-  return /(?:>_\s*OpenAI Codex|Limits\s*:)/i.test(text)
-    && /refresh requested|run \/status again/i.test(text);
-}
-
-function bracketedPaste(text) {
-  return `\x1b[200~${text}\x1b[201~`;
 }
 
 function predismissCodexUpdate() {
@@ -127,7 +114,82 @@ function predismissCodexUpdate() {
   }
 }
 
-function fetchCodexResult(options = {}) {
+function createCodexStageState() {
+  return {
+    updateSkipped: false,
+    trustAccepted: false,
+    statusSent: false,
+    waitingForScreen: null,
+  };
+}
+
+function codexStageStep(state, screen) {
+  const nextState = { ...createCodexStageState(), ...(state || {}) };
+  const writes = [];
+
+  if (screen === 'status') {
+    return { writes, state: nextState, done: true };
+  }
+
+  if (nextState.waitingForScreen) {
+    if (screen === nextState.waitingForScreen) {
+      return { writes, state: nextState };
+    }
+    nextState.waitingForScreen = null;
+  }
+
+  if (screen === 'update') {
+    if (!nextState.updateSkipped) {
+      nextState.updateSkipped = true;
+      nextState.waitingForScreen = 'update';
+      writes.push(KEY_DOWN, '\r');
+    }
+    return { writes, state: nextState };
+  }
+
+  if (screen === 'trust') {
+    if (!nextState.trustAccepted) {
+      nextState.trustAccepted = true;
+      nextState.waitingForScreen = 'trust';
+      writes.push('\r');
+    }
+    return { writes, state: nextState };
+  }
+
+  if (screen === 'ready' && !nextState.statusSent) {
+    nextState.statusSent = true;
+    writes.push(...STATUS_COMMAND_KEYS, '\r');
+  }
+
+  return { writes, state: nextState };
+}
+
+function writeCodexStageKeys(term, writes, onDone, onError) {
+  let index = 0;
+
+  const writeNext = () => {
+    if (!term || index >= writes.length) {
+      onDone();
+      return;
+    }
+
+    const write = writes[index];
+    index += 1;
+    try {
+      term.write(write);
+    } catch (error) {
+      onError(error);
+      return;
+    }
+
+    const delay = write === KEY_DOWN || write === '\r' ? STAGE_ENTER_DELAY_MS : STAGE_KEY_DELAY_MS;
+    setTimeout(writeNext, delay);
+  };
+
+  writeNext();
+}
+
+async function fetchCodexPtyResult(options = {}) {
   try {
     predismissCodexUpdate();
   } catch (error) {
@@ -137,90 +199,157 @@ function fetchCodexResult(options = {}) {
   return spawnUsagePty({
     service: 'codex',
     command: 'codex',
-    slashCommand: bracketedPaste('/status'),
+    slashCommand: '/status',
     postCommandSilenceMs: 8000,
     readyCommandDelayMs: READY_COMMAND_DELAY_MS,
+    useReadyFallback: false,
     detect: detectCodexScreen,
     parse: parseCodexStatus,
     createState() {
-      return {
-        interstitialDismissed: false,
-        limitsRefreshRetryCount: 0,
-        limitsRefreshTimer: null,
-        statusRetryCount: 0,
-        trustAccepted: false,
-      };
+      return createCodexStageState();
     },
-    teardownState(state) {
-      clearTimeout(state.limitsRefreshTimer);
-    },
-    afterInitialSubmit({ markCommandSent }) {
-      markCommandSent();
-      return true;
-    },
-    handlePreCommandData({ finish, raw, scheduleReadySend, state, term }) {
+    handlePreCommandData({ finish, markCommandSent, raw, state, term }) {
       const screen = detectCodexScreen(raw);
-      if (screen === 'trust' && !state.trustAccepted) {
-        state.trustAccepted = true;
-        try {
-          // Best-effort fallback; preseeded trust config should usually avoid this prompt.
-          term.write('\r');
-        } catch (error) {
-          finish(error.message);
-        }
-        return true;
-      }
-      if (screen === 'update' && !state.interstitialDismissed) {
-        state.interstitialDismissed = true;
-        try {
-          term.write('2\r');
-        } catch (error) {
-          finish(error.message);
-        }
-        return true;
-      }
-      if (screen === 'ready') {
-        scheduleReadySend(READY_COMMAND_DELAY_MS);
-        return true;
-      }
-      if (screen === 'status') {
+      const step = codexStageStep(state, screen);
+      Object.assign(state, step.state);
+
+      if (step.done) {
         finish();
         return true;
       }
-      return false;
-    },
-    handlePostCommandData({ finish, raw, state, term }) {
-      if (shouldRefreshCodexLimits(raw) && state.limitsRefreshRetryCount < 2) {
-        state.limitsRefreshRetryCount += 1;
-        clearTimeout(state.limitsRefreshTimer);
-        state.limitsRefreshTimer = setTimeout(() => {
-          try {
-            term.write(bracketedPaste('/status'));
-            setTimeout(() => {
-              try {
-                term.write('\r');
-              } catch (error) {
-                finish(error.message);
-              }
-            }, COMMAND_SUBMIT_DELAY_MS);
-          } catch (error) {
+
+      if (step.writes.length > 0) {
+        try {
+          writeCodexStageKeys(term, step.writes, () => {
+            if (state.statusSent) {
+              markCommandSent();
+            }
+          }, (error) => {
             finish(error.message);
-          }
-        }, 1800);
+          });
+        } catch (error) {
+          finish(error.message);
+        }
         return true;
       }
-      if (!shouldRetryCodexStatusSubmit(raw) || state.statusRetryCount > 0) {
-        return false;
-      }
-      state.statusRetryCount += 1;
-      try {
-        term.write('\r');
-      } catch (error) {
-        finish(error.message);
-      }
-      return false;
+
+      return screen === 'update' || screen === 'trust' || screen === 'ready';
     },
-  }, { ...options, timeoutMs: options.timeoutMs || 30000 });
+  }, { ...options, timeoutMs: options.timeoutMs || 30000 }).then((result) => ({ ...result, tier: 'cli-pty' }));
+}
+
+function collectCodexSessionFiles(dir, files = []) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      collectCodexSessionFiles(entryPath, files);
+    } else if (entry.isFile() && /^rollout-.*\.jsonl$/i.test(entry.name)) {
+      try {
+        files.push({ file: entryPath, mtimeMs: fs.statSync(entryPath).mtimeMs });
+      } catch {
+        // Ignore files that disappear during scan.
+      }
+    }
+  }
+  return files;
+}
+
+function parseCodexSessionRecord(record) {
+  const payload = record && record.payload;
+  const rateLimits = payload && payload.rate_limits;
+  const primary = rateLimits && rateLimits.primary;
+  const timestampMs = Date.parse(record && record.timestamp);
+  const usedPercent = Number(primary && primary.used_percent);
+  if (
+    !payload
+    || payload.type !== 'token_count'
+    || !primary
+    || !Number.isFinite(timestampMs)
+    || !Number.isFinite(usedPercent)
+  ) {
+    return null;
+  }
+
+  let resetInMs = null;
+  if (Number.isFinite(Number(primary.resets_at))) {
+    resetInMs = (Number(primary.resets_at) * 1000) - Date.now();
+  } else if (Number.isFinite(Number(primary.resets_in_seconds))) {
+    resetInMs = timestampMs + (Number(primary.resets_in_seconds) * 1000) - Date.now();
+  }
+
+  return {
+    service: 'codex',
+    pct: clampPct(100 - usedPercent),
+    resetInMs,
+    plan: typeof rateLimits.plan_type === 'string' ? rateLimits.plan_type.toUpperCase() : null,
+    source: 'session-file',
+    fetchedAt: Date.now(),
+    capturedAt: timestampMs,
+  };
+}
+
+function parseCodexSession(options = {}) {
+  const base = options.baseDir || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  const sessionDir = path.join(base, 'sessions');
+  const files = collectCodexSessionFiles(sessionDir)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, 8);
+
+  let latest = null;
+  for (const { file } of files) {
+    let lines = [];
+    try {
+      lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    } catch {
+      continue;
+    }
+
+    let lastInFile = null;
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = parseCodexSessionRecord(JSON.parse(line));
+        if (parsed) {
+          lastInFile = parsed;
+        }
+      } catch {
+        // Ignore malformed session lines.
+      }
+    }
+
+    if (!lastInFile) {
+      continue;
+    }
+    if (!latest || lastInFile.capturedAt > latest.capturedAt) {
+      latest = lastInFile;
+    }
+  }
+
+  return latest;
+}
+
+async function fetchCodexResult(options = {}) {
+  const tier1 = await fetchCodexPtyResult(options);
+  if (tier1.parsed) {
+    return tier1;
+  }
+
+  const parsed = parseCodexSession(options);
+  return {
+    parsed,
+    raw: parsed ? '' : tier1.raw,
+    error: parsed ? null : (tier1.error || 'session snapshot unavailable'),
+    tier: 'session-file',
+  };
 }
 
 async function fetchCodex(options = {}) {
@@ -232,12 +361,13 @@ async function fetchCodex(options = {}) {
 }
 
 module.exports = {
+  codexStageStep,
+  createCodexStageState,
   detectCodexScreen,
   fetchCodex,
   fetchCodexResult,
+  parseCodexSession,
+  parseCodexSessionRecord,
   parseCodexStatus,
   predismissCodexUpdate,
-  bracketedPaste,
-  shouldRefreshCodexLimits,
-  shouldRetryCodexStatusSubmit,
 };

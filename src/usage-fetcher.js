@@ -3,12 +3,16 @@ const {
   fetchClaude,
   fetchClaudeResult,
   parseClaudeUsage,
+  parseClaudeUsageText,
   shouldConfirmClaudeUsage,
 } = require('./services/claudeUsage');
 const {
+  codexStageStep,
+  createCodexStageState,
   detectCodexScreen,
   fetchCodex,
   fetchCodexResult,
+  parseCodexSession,
   parseCodexStatus,
 } = require('./services/codexUsage');
 const {
@@ -17,7 +21,7 @@ const {
   resolveCommand,
   shouldIgnorePtyException,
 } = require('./services/cliPty');
-const { stripAnsi } = require('./services/usageText');
+const { latestScreen, stripAnsi } = require('./services/usageText');
 
 const inFlightByService = new Map();
 
@@ -54,7 +58,7 @@ async function fetchServiceResult(service, options = {}) {
 
   const fetcher = SERVICE_FETCHERS[service];
   if (!fetcher) {
-    return { parsed: null, raw: '', error: `Unknown service: ${service}` };
+    return { parsed: null, raw: '', error: `Unknown service: ${service}`, tier: null };
   }
 
   const promise = fetcher(options).finally(() => {
@@ -110,6 +114,8 @@ async function fetchUsage(options = {}) {
 }
 
 module.exports = {
+  codexStageStep,
+  createCodexStageState,
   detectClaudeScreen,
   detectCodexScreen,
   detectServiceScreen,
@@ -117,7 +123,10 @@ module.exports = {
   fetchCodex,
   fetchService,
   fetchUsage,
+  latestScreen,
   parseClaudeUsage,
+  parseClaudeUsageText,
+  parseCodexSession,
   parseCodexStatus,
   parseUsage,
   prepareSilentForkArgs,

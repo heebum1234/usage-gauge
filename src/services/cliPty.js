@@ -8,8 +8,8 @@ const DEFAULT_TIMEOUT_MS = 15000;
 const READY_SILENCE_MS = 500;
 const READY_FALLBACK_MS = 8000;
 const READY_COMMAND_DELAY_MS = 1200;
-const COMMAND_SUBMIT_DELAY_MS = 180;
 const COMMAND_EXEC_DELAY_MS = 380;
+const COMMAND_KEY_DELAY_MS = 35;
 const SILENCE_AFTER_COMMAND_MS = 3000;
 const PARSE_GRACE_MS = 250;
 
@@ -189,6 +189,7 @@ function spawnUsagePty(config, options = {}) {
   const env = { ...process.env, TERM: 'xterm-256color', ...(options.env || {}) };
   const command = resolveCommand(config.command);
   const postCommandSilenceMs = config.postCommandSilenceMs || SILENCE_AFTER_COMMAND_MS;
+  const useReadyFallback = config.useReadyFallback !== false;
 
   console.error('[usage-fetcher] spawn:', config.service, '→', command.resolvedPath);
 
@@ -260,14 +261,39 @@ function spawnUsagePty(config, options = {}) {
       postCommandSilenceTimer = setTimeout(() => finish(), postCommandSilenceMs);
     };
 
+    const typeSlashCommand = (onDone, onError) => {
+      const keys = Array.from(config.slashCommand || '');
+      let index = 0;
+
+      const writeNext = () => {
+        if (settled || !term || commandSent) {
+          return;
+        }
+        if (index >= keys.length) {
+          onDone();
+          return;
+        }
+
+        try {
+          term.write(keys[index]);
+        } catch (error) {
+          onError(error);
+          return;
+        }
+        index += 1;
+        setTimeout(writeNext, COMMAND_KEY_DELAY_MS);
+      };
+
+      writeNext();
+    };
+
     const sendSlashCommand = () => {
       if (settled || !term || commandSent || commandPending) {
         return;
       }
       commandPending = true;
       try {
-        term.write(config.slashCommand);
-        setTimeout(() => {
+        typeSlashCommand(() => {
           if (settled || !term || commandSent) {
             return;
           }
@@ -297,7 +323,9 @@ function spawnUsagePty(config, options = {}) {
           } catch (error) {
             finish(error.message);
           }
-        }, COMMAND_SUBMIT_DELAY_MS);
+        }, (error) => {
+          finish(error.message);
+        });
       } catch (error) {
         finish(error.message);
       }
@@ -312,7 +340,7 @@ function spawnUsagePty(config, options = {}) {
     };
 
     const totalTimer = setTimeout(() => finish('timeout'), timeoutMs);
-    const readyFallbackTimer = setTimeout(sendSlashCommand, READY_FALLBACK_MS);
+    const readyFallbackTimer = useReadyFallback ? setTimeout(sendSlashCommand, READY_FALLBACK_MS) : null;
     process.on('uncaughtException', onPtyUncaughtException);
 
     try {
@@ -364,8 +392,10 @@ function spawnUsagePty(config, options = {}) {
           finish();
           return;
         }
-        clearTimeout(readySilenceTimer);
-        readySilenceTimer = setTimeout(sendSlashCommand, READY_SILENCE_MS);
+        if (useReadyFallback) {
+          clearTimeout(readySilenceTimer);
+          readySilenceTimer = setTimeout(sendSlashCommand, READY_SILENCE_MS);
+        }
         return;
       }
 
@@ -403,7 +433,7 @@ function spawnUsagePty(config, options = {}) {
 
 module.exports = {
   COMMAND_EXEC_DELAY_MS,
-  COMMAND_SUBMIT_DELAY_MS,
+  COMMAND_KEY_DELAY_MS,
   DEFAULT_TIMEOUT_MS,
   PARSE_GRACE_MS,
   READY_COMMAND_DELAY_MS,

@@ -35,6 +35,23 @@ function normalizeText(raw) {
     .replace(/\r\n?/g, '\n');
 }
 
+function latestScreen(raw) {
+  const text = String(raw || '').replace(/\\x1b/g, '\x1b');
+  const markers = /\x1b\[(?:2J|3J|H|1;1H)/g;
+  let marker = null;
+  let match = null;
+
+  while ((match = markers.exec(text)) !== null) {
+    marker = match;
+  }
+
+  const current = marker
+    ? text.slice(marker.index + marker[0].length)
+    : text.slice(Math.max(0, text.length - 2000));
+
+  return normalizeText(current);
+}
+
 function clampPct(value) {
   if (!Number.isFinite(value)) {
     return null;
@@ -115,6 +132,7 @@ module.exports = {
   MONTHS,
   clampPct,
   deltaFromDate,
+  latestScreen,
   normalizeText,
   parseClockParts,
   parseLocalReset,
