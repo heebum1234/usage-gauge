@@ -2,11 +2,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, ipcMain, screen } = require('electron');
 const { fetchUsage } = require('./usage-fetcher');
+const { ensureProbeWorkspace } = require('./services/cliWorkspace');
 
 const WINDOW_WIDTH = 456;
 const WINDOW_HEIGHT = 260;
 const WINDOW_INSET = 24;
 const USAGE_REFRESH_MS = 30000;
+const USAGE_RETRY_MS = 5000;
+const MAX_FAST_RETRIES = 2;
 
 const DEFAULT_PREFS = {
   gauge: 'bar',
@@ -19,8 +22,12 @@ let moveSaveTimer = null;
 let usageRefreshTimer = null;
 let usageRefreshInFlight = null;
 let stateFile = '';
+let probeDir = '';
 let savedState = { ...DEFAULT_PREFS };
 let lastSuccessfulUsage = { claude: null, codex: null };
+let lastFetchComplete = { claude: false, codex: false };
+let fastRetryCount = 0;
+let usageRefreshStopped = false;
 
 function readState() {
   try {
@@ -89,11 +96,15 @@ async function refreshUsageNow() {
     return usageRefreshInFlight;
   }
 
-  usageRefreshInFlight = fetchUsage()
+  usageRefreshInFlight = fetchUsage(probeDir ? { cwd: probeDir } : undefined)
     .catch(() => ({ claude: null, codex: null, fetchedAt: Date.now() }))
     .then((usage) => {
       writeRawUsageLogs(usage);
       logUsageStatus(usage);
+      lastFetchComplete = {
+        claude: Boolean(usage.claude),
+        codex: Boolean(usage.codex),
+      };
 
       if (usage.claude) {
         lastSuccessfulUsage.claude = usage.claude;
@@ -154,9 +165,38 @@ function logUsageStatus(usage) {
 }
 
 function startUsageRefresh() {
-  clearInterval(usageRefreshTimer);
-  refreshUsageNow();
-  usageRefreshTimer = setInterval(refreshUsageNow, USAGE_REFRESH_MS);
+  clearTimeout(usageRefreshTimer);
+  fastRetryCount = 0;
+  usageRefreshStopped = false;
+  const refreshPromise = refreshUsageNow();
+  refreshPromise.finally(scheduleNextUsageRefresh);
+}
+
+function scheduleUsageRefresh(delayMs) {
+  if (usageRefreshStopped) {
+    return;
+  }
+  clearTimeout(usageRefreshTimer);
+  usageRefreshTimer = setTimeout(runScheduledUsageRefresh, delayMs);
+}
+
+function scheduleNextUsageRefresh() {
+  if (usageRefreshStopped) {
+    return;
+  }
+  const incomplete = !lastFetchComplete.claude || !lastFetchComplete.codex;
+  if (incomplete && fastRetryCount < MAX_FAST_RETRIES) {
+    fastRetryCount += 1;
+    scheduleUsageRefresh(USAGE_RETRY_MS);
+    return;
+  }
+
+  fastRetryCount = 0;
+  scheduleUsageRefresh(USAGE_REFRESH_MS);
+}
+
+function runScheduledUsageRefresh() {
+  refreshUsageNow().finally(scheduleNextUsageRefresh);
 }
 
 function handleLocalShortcut(event, input) {
@@ -245,6 +285,7 @@ if (!singleInstanceLock) {
 
   app.whenReady().then(() => {
     stateFile = path.join(app.getPath('userData'), 'window-state.json');
+    probeDir = ensureProbeWorkspace(app.getPath('userData'));
     savedState = readState();
     createWindow();
 
@@ -289,6 +330,7 @@ ipcMain.on('usage-gauge:quit', () => {
 ipcMain.handle('usage-gauge:request-usage-refresh', () => refreshUsageNow());
 
 app.on('window-all-closed', () => {
-  clearInterval(usageRefreshTimer);
+  usageRefreshStopped = true;
+  clearTimeout(usageRefreshTimer);
   app.quit();
 });

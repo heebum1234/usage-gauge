@@ -1,11 +1,15 @@
 {
   "name": "usage-gauge",
+  "version": "0.1.0",
+  "description": "A floating desktop widget for Claude Code and Codex usage",
+  "author": "Heebum Jeong",
   "private": true,
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "cross-env USAGE_GAUGE_DEV=1 electron .",
-    "test": "node test/renderer-plan-display.test.js && node test/usage-services.test.js && node test/usage-fetcher.test.js",
+    "test": "node test/renderer-plan-display.test.js && node test/usage-services.test.js && node test/usage-fetcher.test.js && node test/packaging-config.test.js",
+    "build": "electron-builder --win nsis",
     "probe-usage": "node scripts/fetch-usage-once.js"
   },
   "dependencies": {
@@ -13,6 +17,24 @@
   },
   "devDependencies": {
     "electron": "^33.0.0",
-    "cross-env": "^7.0.3"
+    "cross-env": "^7.0.3",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.heebum.usage-gauge",
+    "productName": "Usage Gauge",
+    "files": [
+      "src/**/*",
+      "scripts/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
   }
 }
