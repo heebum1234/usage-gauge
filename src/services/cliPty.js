@@ -191,7 +191,9 @@ function spawnUsagePty(config, options = {}) {
   const postCommandSilenceMs = config.postCommandSilenceMs || SILENCE_AFTER_COMMAND_MS;
   const useReadyFallback = config.useReadyFallback !== false;
 
-  console.error('[usage-fetcher] spawn:', config.service, '→', command.resolvedPath);
+  if (options.debug) {
+    console.error('[usage-fetcher] spawn:', config.service, '→', command.resolvedPath);
+  }
 
   return new Promise((resolve) => {
     let term = null;
@@ -203,6 +205,7 @@ function spawnUsagePty(config, options = {}) {
     let readyCommandTimer = null;
     let postCommandSilenceTimer = null;
     let parseGraceTimer = null;
+    let parseLogged = false;
     let firstDataAt = null;
     const startedAt = Date.now();
     const state = config.createState ? config.createState() : {};
@@ -360,11 +363,17 @@ function spawnUsagePty(config, options = {}) {
     state.term = term;
 
     term.onData((data) => {
+      if (settled) {
+        return;
+      }
+
       raw += data;
 
       if (!firstDataAt) {
         firstDataAt = Date.now();
-        console.error('[usage-fetcher]', config.service, 'first data after', firstDataAt - startedAt, 'ms, bytes=', data.length);
+        if (options.debug) {
+          console.error('[usage-fetcher]', config.service, 'first data after', firstDataAt - startedAt, 'ms, bytes=', data.length);
+        }
       }
 
       if (!commandSent) {
@@ -416,6 +425,10 @@ function spawnUsagePty(config, options = {}) {
       }
 
       if (config.parse(raw)) {
+        if (!parseLogged) {
+          parseLogged = true;
+          console.log(`[usage-flow] ${config.service} parsed -> finish pending`);
+        }
         clearTimeout(parseGraceTimer);
         parseGraceTimer = setTimeout(() => finish(), PARSE_GRACE_MS);
       }
@@ -425,7 +438,9 @@ function spawnUsagePty(config, options = {}) {
       if (settled) {
         return;
       }
-      console.error('[usage-fetcher]', config.service, 'exit code=', event.exitCode, 'signal=', event.signal);
+      if (options.debug) {
+        console.error('[usage-fetcher]', config.service, 'exit code=', event.exitCode, 'signal=', event.signal);
+      }
       finish(event.exitCode === 0 ? null : `exit ${event.exitCode}`);
     });
   });

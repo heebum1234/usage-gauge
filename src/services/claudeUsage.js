@@ -176,6 +176,7 @@ function fetchClaudePtyResult(options = {}) {
       return {
         awaitingUsageConfirm: false,
         trustAccepted: false,
+        usageCommandSent: false,
         usageConfirmSent: false,
       };
     },
@@ -227,6 +228,7 @@ function fetchClaudePtyResult(options = {}) {
       if (screen === 'trust' && !state.trustAccepted) {
         state.trustAccepted = true;
         try {
+          console.log('[usage-preflight] claude trust -> enter');
           term.write('\r');
         } catch (error) {
           finish(error.message);
@@ -234,7 +236,11 @@ function fetchClaudePtyResult(options = {}) {
         return true;
       }
       if (screen === 'ready') {
-        sendSlashCommand();
+        if (!state.usageCommandSent) {
+          state.usageCommandSent = true;
+          console.log('[usage-flow] claude ready -> /usage');
+          sendSlashCommand();
+        }
         return true;
       }
       if (screen === 'status') {
@@ -258,7 +264,10 @@ function fetchClaudePtyResult(options = {}) {
 
       return false;
     },
-  }, options).then((result) => ({ ...result, tier: 'cli-pty' }));
+  }, options).then((result) => {
+    console.log(`[usage-flow] claude result parsed=${Boolean(result.parsed)}${result.error ? ` error=${result.error}` : ''}`);
+    return { ...result, tier: 'cli-pty' };
+  });
 }
 
 function readClaudeCredentials() {

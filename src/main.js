@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, ipcMain, screen } = require('electron');
-const { fetchUsage } = require('./usage-fetcher');
+const { fetchServiceResult } = require('./usage-fetcher');
 const { ensureProbeWorkspace } = require('./services/cliWorkspace');
 
 const WINDOW_WIDTH = 456;
@@ -19,15 +19,15 @@ const DEFAULT_PREFS = {
 
 let mainWindow = null;
 let moveSaveTimer = null;
-let usageRefreshTimer = null;
-let usageRefreshInFlight = null;
 let stateFile = '';
 let probeDir = '';
 let savedState = { ...DEFAULT_PREFS };
 let lastSuccessfulUsage = { claude: null, codex: null };
-let lastFetchComplete = { claude: false, codex: false };
-let fastRetryCount = 0;
 let usageRefreshStopped = false;
+const usageRefreshState = {
+  claude: { timer: null, inFlight: null, fastRetryCount: 0 },
+  codex: { timer: null, inFlight: null, fastRetryCount: 0 },
+};
 
 function readState() {
   try {
@@ -92,111 +92,137 @@ function clampWindowPosition(x, y, workArea = screen.getPrimaryDisplay().workAre
 }
 
 async function refreshUsageNow() {
-  if (usageRefreshInFlight) {
-    return usageRefreshInFlight;
-  }
-
-  usageRefreshInFlight = fetchUsage(probeDir ? { cwd: probeDir } : undefined)
-    .catch(() => ({ claude: null, codex: null, fetchedAt: Date.now() }))
-    .then((usage) => {
-      writeRawUsageLogs(usage);
-      logUsageStatus(usage);
-      lastFetchComplete = {
-        claude: Boolean(usage.claude),
-        codex: Boolean(usage.codex),
-      };
-
-      if (usage.claude) {
-        lastSuccessfulUsage.claude = usage.claude;
-      }
-      if (usage.codex) {
-        lastSuccessfulUsage.codex = usage.codex;
-      }
-
-      const rendererUsage = {
-        claude: usage.claude || lastSuccessfulUsage.claude || null,
-        codex: usage.codex || lastSuccessfulUsage.codex || null,
-        fetchedAt: usage.fetchedAt || Date.now(),
-      };
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('usage-gauge:usage-update', rendererUsage);
-      }
-      return rendererUsage;
-    })
-    .finally(() => {
-      usageRefreshInFlight = null;
-    });
-
-  return usageRefreshInFlight;
+  const results = await Promise.all(['claude', 'codex'].map((service) => refreshUsageServiceNow(service)));
+  return {
+    claude: results[0] && results[0].parsed,
+    codex: results[1] && results[1].parsed,
+    fetchedAt: Date.now(),
+  };
 }
 
-function writeRawUsageLogs(usage) {
-  if (!usage || !usage.raw) {
+function refreshUsageServiceNow(service) {
+  const state = usageRefreshState[service];
+  if (!state) {
+    return Promise.resolve({ parsed: null, raw: '', error: `Unknown service: ${service}`, tier: null });
+  }
+  if (state.inFlight) {
+    return state.inFlight;
+  }
+
+  const options = probeDir ? { cwd: probeDir } : undefined;
+  state.inFlight = fetchServiceResult(service, options)
+    .catch((error) => ({ parsed: null, raw: '', error: error.message, tier: null }))
+    .then((result) => {
+      handleServiceUsageResult(service, result);
+      return result;
+    })
+    .finally(() => {
+      state.inFlight = null;
+    });
+
+  return state.inFlight;
+}
+
+function handleServiceUsageResult(service, result) {
+  const parsed = result && result.parsed;
+
+  if (parsed) {
+    lastSuccessfulUsage[service] = parsed;
+  } else if (result && result.raw) {
+    writeRawUsageLog(service, result.raw);
+  }
+
+  logServiceUsageStatus(service, parsed);
+  sendUsageSnapshot();
+  scheduleNextServiceUsageRefresh(service, Boolean(parsed));
+}
+
+function sendUsageSnapshot() {
+  const rendererUsage = {
+    claude: lastSuccessfulUsage.claude || null,
+    codex: lastSuccessfulUsage.codex || null,
+    fetchedAt: Date.now(),
+  };
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('usage-gauge:usage-update', rendererUsage);
+  }
+}
+
+function writeRawUsageLog(service, raw) {
+  if (!raw) {
     return;
   }
 
-  for (const service of ['claude', 'codex']) {
-    if (usage[service] || !usage.raw[service]) {
-      continue;
-    }
-
-    try {
-      fs.writeFileSync(
-        path.join(app.getPath('userData'), `last-usage-output-${service}.log`),
-        usage.raw[service],
-        'utf8',
-      );
-    } catch {
-      // Debug logs are best-effort only.
-    }
+  try {
+    fs.writeFileSync(
+      path.join(app.getPath('userData'), `last-usage-output-${service}.log`),
+      raw,
+      'utf8',
+    );
+  } catch {
+    // Debug logs are best-effort only.
   }
 }
 
-function logUsageStatus(usage) {
-  for (const service of ['claude', 'codex']) {
-    const result = usage && usage[service];
-    if (result && Number.isFinite(result.pct)) {
-      console.log(`[usage] ${service}=ok ${result.pct}%`);
-    } else {
-      console.log(`[usage] ${service}=unreachable`);
-    }
+function logServiceUsageStatus(service, result) {
+  if (result && Number.isFinite(result.pct)) {
+    console.log(`[usage] ${service}=ok ${result.pct}% (${result.source || 'unknown'})`);
+  } else {
+    console.log(`[usage] ${service}=unreachable`);
   }
 }
 
 function startUsageRefresh() {
-  clearTimeout(usageRefreshTimer);
-  fastRetryCount = 0;
   usageRefreshStopped = false;
-  const refreshPromise = refreshUsageNow();
-  refreshPromise.finally(scheduleNextUsageRefresh);
+  for (const service of ['claude', 'codex']) {
+    clearServiceUsageRefresh(service);
+    usageRefreshState[service].fastRetryCount = 0;
+    refreshUsageServiceNow(service);
+  }
 }
 
-function scheduleUsageRefresh(delayMs) {
+function clearServiceUsageRefresh(service) {
+  const state = usageRefreshState[service];
+  if (!state) {
+    return;
+  }
+  clearTimeout(state.timer);
+  state.timer = null;
+}
+
+function scheduleServiceUsageRefresh(service, delayMs) {
   if (usageRefreshStopped) {
     return;
   }
-  clearTimeout(usageRefreshTimer);
-  usageRefreshTimer = setTimeout(runScheduledUsageRefresh, delayMs);
+  const state = usageRefreshState[service];
+  if (!state) {
+    return;
+  }
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => runScheduledServiceUsageRefresh(service), delayMs);
 }
 
-function scheduleNextUsageRefresh() {
+function scheduleNextServiceUsageRefresh(service, completed) {
   if (usageRefreshStopped) {
     return;
   }
-  const incomplete = !lastFetchComplete.claude || !lastFetchComplete.codex;
-  if (incomplete && fastRetryCount < MAX_FAST_RETRIES) {
-    fastRetryCount += 1;
-    scheduleUsageRefresh(USAGE_RETRY_MS);
+  const state = usageRefreshState[service];
+  if (!state) {
+    return;
+  }
+  if (!completed && state.fastRetryCount < MAX_FAST_RETRIES) {
+    state.fastRetryCount += 1;
+    scheduleServiceUsageRefresh(service, USAGE_RETRY_MS);
     return;
   }
 
-  fastRetryCount = 0;
-  scheduleUsageRefresh(USAGE_REFRESH_MS);
+  state.fastRetryCount = 0;
+  scheduleServiceUsageRefresh(service, USAGE_REFRESH_MS);
 }
 
-function runScheduledUsageRefresh() {
-  refreshUsageNow().finally(scheduleNextUsageRefresh);
+function runScheduledServiceUsageRefresh(service) {
+  refreshUsageServiceNow(service);
 }
 
 function handleLocalShortcut(event, input) {
@@ -331,6 +357,8 @@ ipcMain.handle('usage-gauge:request-usage-refresh', () => refreshUsageNow());
 
 app.on('window-all-closed', () => {
   usageRefreshStopped = true;
-  clearTimeout(usageRefreshTimer);
+  for (const service of ['claude', 'codex']) {
+    clearServiceUsageRefresh(service);
+  }
   app.quit();
 });

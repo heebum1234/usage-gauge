@@ -1,8 +1,4 @@
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const {
-  READY_COMMAND_DELAY_MS,
   spawnUsagePty,
 } = require('./cliPty');
 const {
@@ -16,9 +12,7 @@ const {
 } = require('./usageText');
 
 const KEY_DOWN = '\x1b[B';
-const STAGE_ENTER_DELAY_MS = 150;
-const STAGE_KEY_DELAY_MS = 45;
-const STATUS_COMMAND_KEYS = Array.from('/status');
+const CODEX_TIMEOUT_MS = 90000;
 
 function parseCodexStatus(raw) {
   const text = normalizeText(raw);
@@ -64,6 +58,7 @@ function parseCodexStatus(raw) {
 
 function detectCodexScreen(raw) {
   const text = latestScreen(raw);
+  const fullText = normalizeText(raw);
   if (/\b5h limit\s*:/.test(text)) {
     return 'status';
   }
@@ -79,277 +74,116 @@ function detectCodexScreen(raw) {
   ) {
     return 'trust';
   }
-  if (/›/.test(text) || /Ask Codex/i.test(text) || /Explain this codebase/i.test(text) || /\?\s+for shortcuts/i.test(text)) {
+  if (isCodexBusy(text)) {
+    return null;
+  }
+  if (
+    /\bOpenAI\s+Codex\b/i.test(fullText)
+    && /\bmodel:\s*(?!loading\b)\S+/i.test(fullText)
+    && /›/.test(text)
+  ) {
     return 'ready';
   }
   return null;
 }
 
-function predismissCodexUpdate() {
-  const versionPath = path.join(os.homedir(), '.codex', 'version.json');
-  let version;
-
-  try {
-    version = JSON.parse(fs.readFileSync(versionPath, 'utf8'));
-  } catch (error) {
-    return;
-  }
-
-  if (
-    !version
-    || typeof version !== 'object'
-    || !version.latest_version
-    || version.dismissed_version === version.latest_version
-  ) {
-    return;
-  }
-
-  try {
-    fs.writeFileSync(versionPath, JSON.stringify({
-      ...version,
-      dismissed_version: version.latest_version,
-    }));
-  } catch (error) {
-    // Best effort only. Usage fetching must continue even if this cache cannot be updated.
-  }
-}
-
-function createCodexStageState() {
-  return {
-    updateSkipped: false,
-    trustAccepted: false,
-    statusSent: false,
-    waitingForScreen: null,
-  };
-}
-
-function codexStageStep(state, screen) {
-  const nextState = { ...createCodexStageState(), ...(state || {}) };
-  const writes = [];
-
-  if (screen === 'status') {
-    return { writes, state: nextState, done: true };
-  }
-
-  if (nextState.waitingForScreen) {
-    if (screen === nextState.waitingForScreen) {
-      return { writes, state: nextState };
-    }
-    nextState.waitingForScreen = null;
-  }
-
-  if (screen === 'update') {
-    if (!nextState.updateSkipped) {
-      nextState.updateSkipped = true;
-      nextState.waitingForScreen = 'update';
-      writes.push(KEY_DOWN, '\r');
-    }
-    return { writes, state: nextState };
-  }
-
-  if (screen === 'trust') {
-    if (!nextState.trustAccepted) {
-      nextState.trustAccepted = true;
-      nextState.waitingForScreen = 'trust';
-      writes.push('\r');
-    }
-    return { writes, state: nextState };
-  }
-
-  if (screen === 'ready' && !nextState.statusSent) {
-    nextState.statusSent = true;
-    writes.push(...STATUS_COMMAND_KEYS, '\r');
-  }
-
-  return { writes, state: nextState };
-}
-
-function writeCodexStageKeys(term, writes, onDone, onError) {
-  let index = 0;
-
-  const writeNext = () => {
-    if (!term || index >= writes.length) {
-      onDone();
-      return;
-    }
-
-    const write = writes[index];
-    index += 1;
-    try {
-      term.write(write);
-    } catch (error) {
-      onError(error);
-      return;
-    }
-
-    const delay = write === KEY_DOWN || write === '\r' ? STAGE_ENTER_DELAY_MS : STAGE_KEY_DELAY_MS;
-    setTimeout(writeNext, delay);
-  };
-
-  writeNext();
+function isCodexBusy(text) {
+  return /Booting MCP server|esc to interrupt|task is in progress/i.test(text);
 }
 
 async function fetchCodexPtyResult(options = {}) {
-  try {
-    predismissCodexUpdate();
-  } catch (error) {
-    // Best effort only. The PTY update prompt handler remains as a fallback.
-  }
-
   return spawnUsagePty({
     service: 'codex',
     command: 'codex',
     slashCommand: '/status',
     postCommandSilenceMs: 8000,
-    readyCommandDelayMs: READY_COMMAND_DELAY_MS,
+    readyCommandDelayMs: 0,
     useReadyFallback: false,
     detect: detectCodexScreen,
     parse: parseCodexStatus,
     createState() {
-      return createCodexStageState();
+      return {
+        busyLogged: false,
+        updateSkipped: false,
+        trustAccepted: false,
+        statusSent: false,
+      };
     },
     handlePreCommandData({ finish, markCommandSent, raw, state, term }) {
-      const screen = detectCodexScreen(raw);
-      const step = codexStageStep(state, screen);
-      Object.assign(state, step.state);
+      const text = latestScreen(raw);
+      if (isCodexBusy(text)) {
+        if (!state.busyLogged) {
+          state.busyLogged = true;
+          console.log('[usage-flow] codex waiting for MCP');
+        }
+        return true;
+      }
 
-      if (step.done) {
+      const screen = detectCodexScreen(raw);
+
+      if (screen === 'status') {
         finish();
         return true;
       }
 
-      if (step.writes.length > 0) {
-        try {
-          writeCodexStageKeys(term, step.writes, () => {
-            if (state.statusSent) {
-              markCommandSent();
-            }
-          }, (error) => {
+      if (screen === 'update') {
+        if (!state.updateSkipped) {
+          state.updateSkipped = true;
+          try {
+            console.log('[usage-preflight] codex update -> down, enter');
+            term.write(KEY_DOWN);
+            term.write('\r');
+          } catch (error) {
             finish(error.message);
-          });
-        } catch (error) {
-          finish(error.message);
+          }
         }
         return true;
       }
 
-      return screen === 'update' || screen === 'trust' || screen === 'ready';
-    },
-  }, { ...options, timeoutMs: options.timeoutMs || 30000 }).then((result) => ({ ...result, tier: 'cli-pty' }));
-}
-
-function collectCodexSessionFiles(dir, files = []) {
-  let entries = [];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return files;
-  }
-
-  for (const entry of entries) {
-    const entryPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectCodexSessionFiles(entryPath, files);
-    } else if (entry.isFile() && /^rollout-.*\.jsonl$/i.test(entry.name)) {
-      try {
-        files.push({ file: entryPath, mtimeMs: fs.statSync(entryPath).mtimeMs });
-      } catch {
-        // Ignore files that disappear during scan.
-      }
-    }
-  }
-  return files;
-}
-
-function parseCodexSessionRecord(record) {
-  const payload = record && record.payload;
-  const rateLimits = payload && payload.rate_limits;
-  const primary = rateLimits && rateLimits.primary;
-  const timestampMs = Date.parse(record && record.timestamp);
-  const usedPercent = Number(primary && primary.used_percent);
-  if (
-    !payload
-    || payload.type !== 'token_count'
-    || !primary
-    || !Number.isFinite(timestampMs)
-    || !Number.isFinite(usedPercent)
-  ) {
-    return null;
-  }
-
-  let resetInMs = null;
-  if (Number.isFinite(Number(primary.resets_at))) {
-    resetInMs = (Number(primary.resets_at) * 1000) - Date.now();
-  } else if (Number.isFinite(Number(primary.resets_in_seconds))) {
-    resetInMs = timestampMs + (Number(primary.resets_in_seconds) * 1000) - Date.now();
-  }
-
-  return {
-    service: 'codex',
-    pct: clampPct(100 - usedPercent),
-    resetInMs,
-    plan: typeof rateLimits.plan_type === 'string' ? rateLimits.plan_type.toUpperCase() : null,
-    source: 'session-file',
-    fetchedAt: Date.now(),
-    capturedAt: timestampMs,
-  };
-}
-
-function parseCodexSession(options = {}) {
-  const base = options.baseDir || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
-  const sessionDir = path.join(base, 'sessions');
-  const files = collectCodexSessionFiles(sessionDir)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .slice(0, 8);
-
-  let latest = null;
-  for (const { file } of files) {
-    let lines = [];
-    try {
-      lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-    } catch {
-      continue;
-    }
-
-    let lastInFile = null;
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed = parseCodexSessionRecord(JSON.parse(line));
-        if (parsed) {
-          lastInFile = parsed;
+      if (screen === 'trust') {
+        if (!state.trustAccepted) {
+          state.trustAccepted = true;
+          try {
+            console.log('[usage-preflight] codex trust -> enter');
+            term.write('\r');
+          } catch (error) {
+            finish(error.message);
+          }
         }
-      } catch {
-        // Ignore malformed session lines.
+        return true;
       }
-    }
 
-    if (!lastInFile) {
-      continue;
-    }
-    if (!latest || lastInFile.capturedAt > latest.capturedAt) {
-      latest = lastInFile;
-    }
-  }
+      if (screen === 'ready') {
+        if (!state.statusSent) {
+          state.statusSent = true;
+          console.log('[usage-flow] codex ready -> /status');
+          try {
+            term.write('/status\r');
+            markCommandSent();
+          } catch (error) {
+            finish(error.message);
+          }
+        }
+        return true;
+      }
 
-  return latest;
+      return false;
+    },
+  }, { ...options, timeoutMs: options.timeoutMs || CODEX_TIMEOUT_MS }).then((result) => {
+    try {
+      const screen = result.raw ? normalizeText(result.raw) : '(empty)';
+      const logPath = path.join(os.tmpdir(), 'usage-gauge-codex-status.log');
+      fs.writeFileSync(logPath, screen, 'utf8');
+    } catch {
+      // Best-effort diagnostic; must never block usage fetching.
+    }
+    console.log(`[usage-flow] codex result parsed=${Boolean(result.parsed)}${result.error ? ` error=${result.error}` : ''}`);
+    return { ...result, tier: 'cli-pty' };
+  });
 }
 
 async function fetchCodexResult(options = {}) {
-  const tier1 = await fetchCodexPtyResult(options);
-  if (tier1.parsed) {
-    return tier1;
-  }
-
-  const parsed = parseCodexSession(options);
-  return {
-    parsed,
-    raw: parsed ? '' : tier1.raw,
-    error: parsed ? null : (tier1.error || 'session snapshot unavailable'),
-    tier: 'session-file',
-  };
+  return fetchCodexPtyResult(options);
 }
 
 async function fetchCodex(options = {}) {
@@ -361,13 +195,8 @@ async function fetchCodex(options = {}) {
 }
 
 module.exports = {
-  codexStageStep,
-  createCodexStageState,
   detectCodexScreen,
   fetchCodex,
   fetchCodexResult,
-  parseCodexSession,
-  parseCodexSessionRecord,
   parseCodexStatus,
-  predismissCodexUpdate,
 };
